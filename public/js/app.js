@@ -2,6 +2,8 @@
 
 class App {
   constructor() {
+    this.vizUpdateInterval = null;
+    this.resizeHandler = null;
     this.init();
   }
 
@@ -11,6 +13,22 @@ class App {
 
     // Load initial stats
     this.loadStats();
+  }
+
+  // Cleanup method to clear intervals and event listeners when navigating away
+  cleanup() {
+    if (this.vizUpdateInterval) {
+      clearInterval(this.vizUpdateInterval);
+      this.vizUpdateInterval = null;
+    }
+    if (this.resizeHandler) {
+      window.removeEventListener('resize', this.resizeHandler);
+      this.resizeHandler = null;
+    }
+    if (this.musicKeyHandler) {
+      document.removeEventListener('keydown', this.musicKeyHandler);
+      this.musicKeyHandler = null;
+    }
   }
 
   registerRoutes() {
@@ -65,6 +83,7 @@ class App {
 
   // ===== DASHBOARD =====
   async renderDashboard() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     try {
@@ -451,6 +470,7 @@ class App {
 
   // ===== VIDEOS =====
   async renderVideos() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     try {
@@ -565,6 +585,7 @@ class App {
 
   // ===== MUSIC =====
   async renderMusic() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     try {
@@ -635,11 +656,21 @@ class App {
             </div>
 
             <div class="viz-controls">
+              <button class="viz-control-btn ${musicPlayer.shuffle ? 'active' : ''}" id="viz-shuffle" title="Shuffle">
+                <span class="viz-control-icon">&#8645;</span>
+                <span class="viz-control-label">SHUF</span>
+              </button>
+              <span class="viz-control-divider">|</span>
               <button class="viz-control-btn" id="viz-prev">&lt;&lt;&lt;</button>
               <span class="viz-control-divider">|</span>
               <button class="viz-control-btn" id="viz-play">&#9654;</button>
               <span class="viz-control-divider">|</span>
               <button class="viz-control-btn" id="viz-next">&gt;&gt;&gt;</button>
+              <span class="viz-control-divider">|</span>
+              <button class="viz-control-btn" id="viz-repeat" title="Repeat">
+                <span class="viz-control-icon">&#8634;</span>
+                <span class="viz-control-label" id="viz-repeat-label">${musicPlayer.repeat === 'none' ? 'OFF' : musicPlayer.repeat === 'all' ? 'ALL' : 'ONE'}</span>
+              </button>
             </div>
 
             <div class="viz-canvas-container">
@@ -667,10 +698,12 @@ class App {
               </div>
             </div>
             <div class="viz-footer-center">
-              <span>VOLUME: <span id="viz-volume">${Math.round(musicPlayer.volume * 100)}%</span></span>
+              <span>VOL: <span id="viz-volume">${Math.round(musicPlayer.volume * 100)}%</span></span>
+              <span class="viz-footer-divider">|</span>
+              <span class="viz-shortcut-hint">[SPACE] Play | [S] Shuffle | [R] Repeat | [L] List</span>
             </div>
             <div class="viz-footer-right">
-              <span>FREQ ANALYSIS: <span id="viz-freq-status">STANDBY</span></span>
+              <span>FREQ: <span id="viz-freq-status">STANDBY</span></span>
             </div>
           </div>
         </div>
@@ -726,7 +759,8 @@ class App {
       canvas.height = container.clientHeight;
     };
     resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    this.resizeHandler = resizeCanvas;
+    window.addEventListener('resize', this.resizeHandler);
 
     // Animation function
     const draw = () => {
@@ -869,10 +903,71 @@ class App {
     const playBtn = document.getElementById('viz-play');
     const prevBtn = document.getElementById('viz-prev');
     const nextBtn = document.getElementById('viz-next');
+    const shuffleBtn = document.getElementById('viz-shuffle');
+    const repeatBtn = document.getElementById('viz-repeat');
 
     if (playBtn) playBtn.addEventListener('click', () => musicPlayer.togglePlay());
     if (prevBtn) prevBtn.addEventListener('click', () => musicPlayer.playPrevious());
     if (nextBtn) nextBtn.addEventListener('click', () => musicPlayer.playNext());
+
+    if (shuffleBtn) {
+      shuffleBtn.addEventListener('click', () => {
+        const isShuffled = musicPlayer.toggleShuffle();
+        shuffleBtn.classList.toggle('active', isShuffled);
+      });
+    }
+
+    if (repeatBtn) {
+      repeatBtn.addEventListener('click', () => {
+        const mode = musicPlayer.toggleRepeat();
+        const label = document.getElementById('viz-repeat-label');
+        if (label) {
+          label.textContent = mode === 'none' ? 'OFF' : mode === 'all' ? 'ALL' : 'ONE';
+        }
+        repeatBtn.classList.toggle('active', mode !== 'none');
+      });
+    }
+
+    // Keyboard shortcuts for music page
+    this.musicKeyHandler = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+
+      switch (e.key.toLowerCase()) {
+        case 's':
+          // Toggle shuffle
+          if (shuffleBtn) {
+            const isShuffled = musicPlayer.toggleShuffle();
+            shuffleBtn.classList.toggle('active', isShuffled);
+          }
+          break;
+        case 'r':
+          // Toggle repeat
+          if (repeatBtn) {
+            const mode = musicPlayer.toggleRepeat();
+            const label = document.getElementById('viz-repeat-label');
+            if (label) {
+              label.textContent = mode === 'none' ? 'OFF' : mode === 'all' ? 'ALL' : 'ONE';
+            }
+            repeatBtn.classList.toggle('active', mode !== 'none');
+          }
+          break;
+        case 'l':
+          // Toggle track list
+          const tracklist = document.getElementById('viz-tracklist');
+          if (tracklist) {
+            tracklist.classList.toggle('open');
+          }
+          break;
+        case 'escape':
+          // Close track list
+          const tracklistEsc = document.getElementById('viz-tracklist');
+          if (tracklistEsc) {
+            tracklistEsc.classList.remove('open');
+          }
+          break;
+      }
+    };
+    document.addEventListener('keydown', this.musicKeyHandler);
 
     // Progress bar click
     const progressBar = document.getElementById('viz-progress-bar');
@@ -965,6 +1060,7 @@ class App {
 
   // ===== PHOTOS =====
   async renderPhotos() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     try {
@@ -1235,6 +1331,7 @@ class App {
 
   // ===== UPLOAD =====
   async renderUpload() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     content.innerHTML = `
@@ -1336,6 +1433,7 @@ class App {
 
   // ===== SETTINGS =====
   async renderSettings() {
+    this.cleanup();
     const content = document.getElementById('page-content');
 
     try {

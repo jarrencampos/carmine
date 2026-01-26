@@ -74,3 +74,53 @@ class Router {
 
 // Create global router instance
 window.router = new Router();
+
+// Mobile Navigation
+(function() {
+  const menuBtn = document.getElementById('mobile-menu-btn');
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const mobileEq = document.querySelector('.mobile-eq-mini');
+
+  function toggleMenu() {
+    menuBtn.classList.toggle('active');
+    sidebar.classList.toggle('active');
+    overlay.classList.toggle('active');
+    document.body.style.overflow = sidebar.classList.contains('active') ? 'hidden' : '';
+  }
+
+  function closeMenu() {
+    menuBtn.classList.remove('active');
+    sidebar.classList.remove('active');
+    overlay.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+
+  if (menuBtn) {
+    menuBtn.addEventListener('click', toggleMenu);
+  }
+
+  if (overlay) {
+    overlay.addEventListener('click', closeMenu);
+  }
+
+  // Close menu when clicking nav items on mobile
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      if (window.innerWidth <= 768) {
+        closeMenu();
+      }
+    });
+  });
+
+  // Update mobile mini equalizer based on playing state
+  if (mobileEq) {
+    setInterval(() => {
+      if (window.musicPlayer && window.musicPlayer.isPlaying) {
+        mobileEq.classList.add('playing');
+      } else {
+        mobileEq.classList.remove('playing');
+      }
+    }, 200);
+  }
+})();
