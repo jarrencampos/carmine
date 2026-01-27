@@ -30,6 +30,9 @@ A self-hosted media server with a cyberpunk/terminal aesthetic for managing your
 - Background playback on iOS/mobile (lock screen controls via Media Session API)
 - Random shuffle when clicking play with no track selected
 - Real-time audio visualizer using Web Audio API
+- **Playlists** - Create, manage, and play custom playlists
+- **Queue Management** - View, reorder, and remove upcoming tracks
+- Add tracks to queue or playlists directly from the track list
 - Keyboard shortcuts for playback control
 
 ### Dashboard
@@ -120,6 +123,32 @@ You can add multiple directories for each media type through the Settings page o
 | `/api/music/:id/cover` | GET | Get album artwork |
 | `/api/music/:id` | DELETE | Delete track |
 
+### Playlists
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/music/playlists/all` | GET | List all playlists |
+| `/api/music/playlists/:id` | GET | Get single playlist |
+| `/api/music/playlists` | POST | Create playlist |
+| `/api/music/playlists/:id` | PUT | Update playlist (name, tracks) |
+| `/api/music/playlists/:id` | DELETE | Delete playlist |
+| `/api/music/playlists/:id/tracks` | POST | Add tracks to playlist |
+| `/api/music/playlists/:id/tracks` | DELETE | Remove tracks from playlist |
+
+**Create playlist request body:**
+```json
+{
+  "name": "My Playlist",
+  "tracks": ["trackId1", "trackId2"]
+}
+```
+
+**Add/remove tracks request body:**
+```json
+{
+  "trackIds": ["trackId1", "trackId2"]
+}
+```
+
 ### Photos
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -202,6 +231,15 @@ You can add multiple directories for each media type through the Settings page o
 | `Delete` / `Backspace` | Delete photo |
 | `Escape` | Close lightbox |
 
+### Music Page
+| Key | Action |
+|-----|--------|
+| `S` | Toggle shuffle |
+| `R` | Toggle repeat |
+| `L` | Toggle track list |
+| `Q` | Open queue |
+| `P` | Open playlists |
+
 ### Video Player
 | Key | Action |
 |-----|--------|
@@ -221,6 +259,7 @@ Carmine uses a lightweight file-based storage approach:
 - **Photo tags** - `config/photo-tags.json`
 - **Albums** - `config/albums.json`
 - **Video categories** - `config/video-categories.json`
+- **Playlists** - `config/playlists.json`
 
 No database required - all metadata is generated on-demand by scanning the filesystem.
 

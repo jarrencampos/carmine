@@ -499,8 +499,21 @@ class MusicPlayer {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 
+  // Detect iOS/iPadOS
+  isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
   // Web Audio API Visualizer
+  // Skip on iOS - createMediaElementSource routes audio through AudioContext,
+  // and iOS suspends AudioContext when the browser is backgrounded, killing playback.
   initAudioContext() {
+    if (this.isIOS()) {
+      console.log('iOS detected - skipping Web Audio API to preserve background playback');
+      return;
+    }
+
     try {
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
       this.analyser = this.audioContext.createAnalyser();
