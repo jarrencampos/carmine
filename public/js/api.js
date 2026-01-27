@@ -44,6 +44,35 @@ const API = {
 
     getThumbUrl(id) {
       return `/api/videos/${id}/thumb`;
+    },
+
+    // Categories
+    async getCategories() {
+      return API.fetch('/videos/categories');
+    },
+
+    async getByCategory(categoryId) {
+      return API.fetch(`/videos/categories/${categoryId}`);
+    },
+
+    async setCategory(videoId, categoryId) {
+      return API.fetch(`/videos/${videoId}/category`, {
+        method: 'PUT',
+        body: JSON.stringify({ categoryId })
+      });
+    },
+
+    async getCategory(videoId) {
+      return API.fetch(`/videos/${videoId}/category`);
+    },
+
+    // TV Shows
+    async getTVShows() {
+      return API.fetch('/videos/tvshows');
+    },
+
+    async getTVShowEpisodes(showId) {
+      return API.fetch(`/videos/tvshows/${showId}/episodes`);
     }
   },
 
@@ -73,6 +102,10 @@ const API = {
       return API.fetch('/music/playlists/all');
     },
 
+    async getPlaylist(id) {
+      return API.fetch(`/music/playlists/${id}`);
+    },
+
     async createPlaylist(name, tracks = []) {
       return API.fetch('/music/playlists', {
         method: 'POST',
@@ -84,6 +117,20 @@ const API = {
       return API.fetch(`/music/playlists/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data)
+      });
+    },
+
+    async addToPlaylist(playlistId, trackIds) {
+      return API.fetch(`/music/playlists/${playlistId}/tracks`, {
+        method: 'POST',
+        body: JSON.stringify({ trackIds })
+      });
+    },
+
+    async removeFromPlaylist(playlistId, trackIds) {
+      return API.fetch(`/music/playlists/${playlistId}/tracks`, {
+        method: 'DELETE',
+        body: JSON.stringify({ trackIds })
       });
     },
 
@@ -114,6 +161,76 @@ const API = {
 
     getThumbUrl(id) {
       return `/api/photos/${id}/thumb`;
+    },
+
+    // People tags
+    async getTags(photoId) {
+      return API.fetch(`/photos/${photoId}/tags`);
+    },
+
+    async setTags(photoId, people) {
+      return API.fetch(`/photos/${photoId}/tags`, {
+        method: 'PUT',
+        body: JSON.stringify({ people })
+      });
+    },
+
+    async getAllPeople() {
+      return API.fetch('/photos/tags/people');
+    },
+
+    async getByPerson(name) {
+      return API.fetch(`/photos/by-person/${encodeURIComponent(name)}`);
+    }
+  },
+
+  // Albums
+  albums: {
+    async getAll() {
+      return API.fetch('/photos/albums/all');
+    },
+
+    async get(albumId) {
+      return API.fetch(`/photos/albums/${albumId}`);
+    },
+
+    async create(name) {
+      return API.fetch('/photos/albums', {
+        method: 'POST',
+        body: JSON.stringify({ name })
+      });
+    },
+
+    async update(albumId, data) {
+      return API.fetch(`/photos/albums/${albumId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+    },
+
+    async delete(albumId) {
+      return API.fetch(`/photos/albums/${albumId}`, { method: 'DELETE' });
+    },
+
+    async addPhotos(albumId, photoIds) {
+      return API.fetch(`/photos/albums/${albumId}/photos`, {
+        method: 'POST',
+        body: JSON.stringify({ photoIds })
+      });
+    },
+
+    async removePhotos(albumId, photoIds) {
+      return API.fetch(`/photos/albums/${albumId}/photos`, {
+        method: 'DELETE',
+        body: JSON.stringify({ photoIds })
+      });
+    },
+
+    getCoverUrl(album) {
+      if (album.coverPhotoId) {
+        return API.photos.getThumbUrl(album.coverPhotoId);
+      }
+      return null;
     }
   },
 

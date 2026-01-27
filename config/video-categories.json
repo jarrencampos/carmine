@@ -1,0 +1,22 @@
+{
+  "categories": [
+    {
+      "id": "movies",
+      "name": "Movies",
+      "icon": "film"
+    },
+    {
+      "id": "tvshows",
+      "name": "TV Shows",
+      "icon": "tv"
+    },
+    {
+      "id": "homevideos",
+      "name": "Home Videos",
+      "icon": "video"
+    }
+  ],
+  "videoAssignments": {
+    "L1VzZXJzL2phcnJlbmNhbXBvcy9EZXZlbG9wZXIvY2FybWluZS9tZWRpYS92aWRlb3MvZmVyZ3Vzb25ob21lLm1wNA": "homevideos"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "albums": [
+    {
+      "id": "72f1db96-29dd-4776-8652-b8d561d7bb7a",
+      "name": "Christmas",
+      "photoIds": [
+        "L1VzZXJzL2phcnJlbmNhbXBvcy9EZXZlbG9wZXIvY2FybWluZS9tZWRpYS9waG90b3MvSU1HXzMwNzcuanBlZw"
+      ],
+      "coverPhotoId": "L1VzZXJzL2phcnJlbmNhbXBvcy9EZXZlbG9wZXIvY2FybWluZS9tZWRpYS9waG90b3MvSU1HXzMwNzcuanBlZw",
+      "created": "2026-01-27T02:05:48.522Z"
+    }
+  ]
+}

@@ -4,8 +4,32 @@ const fs = require('fs');
 const path = require('path');
 const { scanDirectory } = require('../utils/fileScanner');
 
-// In-memory playlists (in production, use a database)
-let playlists = [];
+// Helper: Get path for playlists file
+const getPlaylistsPath = () => path.resolve(__dirname, '../../config/playlists.json');
+
+// Helper: Read JSON file with default
+function readJsonFile(filePath, defaultValue = {}) {
+  try {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    }
+  } catch (e) {
+    console.error(`Error reading ${filePath}:`, e.message);
+  }
+  return defaultValue;
+}
+
+// Helper: Write JSON file
+function writeJsonFile(filePath, data) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+// Default playlists structure
+const defaultPlaylists = { playlists: [] };
 
 // Get all music
 router.get('/', async (req, res) => {
@@ -175,53 +199,143 @@ router.get('/:id/cover', async (req, res) => {
   }
 });
 
+// ============ PLAYLISTS ============
+
 // Get all playlists
 router.get('/playlists/all', (req, res) => {
-  res.json(playlists);
+  try {
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    res.json(data.playlists);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single playlist
+router.get('/playlists/:id', (req, res) => {
+  try {
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    const playlist = data.playlists.find(p => p.id === req.params.id);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    res.json(playlist);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Create playlist
 router.post('/playlists', (req, res) => {
-  const { name, tracks = [] } = req.body;
+  try {
+    const { name, tracks = [] } = req.body;
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
 
-  const playlist = {
-    id: Date.now().toString(),
-    name,
-    tracks,
-    created: new Date(),
-    modified: new Date()
-  };
+    const playlist = {
+      id: `playlist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      tracks, // Array of track IDs
+      created: new Date().toISOString(),
+      modified: new Date().toISOString()
+    };
 
-  playlists.push(playlist);
-  res.json(playlist);
+    data.playlists.push(playlist);
+    writeJsonFile(getPlaylistsPath(), data);
+
+    res.json(playlist);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Update playlist
+// Update playlist (name, reorder tracks)
 router.put('/playlists/:id', (req, res) => {
-  const { name, tracks } = req.body;
-  const playlist = playlists.find(p => p.id === req.params.id);
+  try {
+    const { name, tracks } = req.body;
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    const playlist = data.playlists.find(p => p.id === req.params.id);
 
-  if (!playlist) {
-    return res.status(404).json({ error: 'Playlist not found' });
+    if (!playlist) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    if (name !== undefined) playlist.name = name;
+    if (tracks !== undefined) playlist.tracks = tracks;
+    playlist.modified = new Date().toISOString();
+
+    writeJsonFile(getPlaylistsPath(), data);
+    res.json(playlist);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
+});
 
-  if (name) playlist.name = name;
-  if (tracks) playlist.tracks = tracks;
-  playlist.modified = new Date();
+// Add tracks to playlist
+router.post('/playlists/:id/tracks', (req, res) => {
+  try {
+    const { trackIds } = req.body;
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    const playlist = data.playlists.find(p => p.id === req.params.id);
 
-  res.json(playlist);
+    if (!playlist) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    // Add tracks (avoid duplicates)
+    trackIds.forEach(id => {
+      if (!playlist.tracks.includes(id)) {
+        playlist.tracks.push(id);
+      }
+    });
+    playlist.modified = new Date().toISOString();
+
+    writeJsonFile(getPlaylistsPath(), data);
+    res.json(playlist);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove tracks from playlist
+router.delete('/playlists/:id/tracks', (req, res) => {
+  try {
+    const { trackIds } = req.body;
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    const playlist = data.playlists.find(p => p.id === req.params.id);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    playlist.tracks = playlist.tracks.filter(id => !trackIds.includes(id));
+    playlist.modified = new Date().toISOString();
+
+    writeJsonFile(getPlaylistsPath(), data);
+    res.json(playlist);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Delete playlist
 router.delete('/playlists/:id', (req, res) => {
-  const index = playlists.findIndex(p => p.id === req.params.id);
+  try {
+    const data = readJsonFile(getPlaylistsPath(), defaultPlaylists);
+    const index = data.playlists.findIndex(p => p.id === req.params.id);
 
-  if (index === -1) {
-    return res.status(404).json({ error: 'Playlist not found' });
+    if (index === -1) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    data.playlists.splice(index, 1);
+    writeJsonFile(getPlaylistsPath(), data);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-
-  playlists.splice(index, 1);
-  res.json({ success: true });
 });
 
 module.exports = router;

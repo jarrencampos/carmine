@@ -29,6 +29,8 @@ class App {
       document.removeEventListener('keydown', this.musicKeyHandler);
       this.musicKeyHandler = null;
     }
+    // Exit cinema mode when leaving videos page
+    this.exitCinemaMode();
   }
 
   registerRoutes() {
@@ -65,6 +67,30 @@ class App {
     router.register('/settings', async () => {
       router.showLoading();
       await this.renderSettings();
+    });
+
+    // Albums
+    router.register('/albums', async (params) => {
+      router.showLoading();
+      if (params && params[0]) {
+        // Single album view
+        await this.renderAlbum(params[0]);
+      } else {
+        // Albums list
+        await this.renderAlbums();
+      }
+    });
+
+    // Playlists
+    router.register('/playlists', async (params) => {
+      router.showLoading();
+      if (params && params[0]) {
+        // Single playlist view
+        await this.renderPlaylist(params[0]);
+      } else {
+        // Playlists list
+        await this.renderPlaylists();
+      }
     });
   }
 
@@ -473,81 +499,76 @@ class App {
     this.cleanup();
     const content = document.getElementById('page-content');
 
+    // Enter cinema mode - hide music player
+    this.enterCinemaMode();
+
     try {
-      const videos = await API.videos.getAll();
+      const [categories, allVideos] = await Promise.all([
+        API.videos.getCategories(),
+        API.videos.getAll()
+      ]);
+
+      // Store all videos for search
+      this.allVideos = allVideos;
 
       content.innerHTML = `
-        <div class="page-header">
-          <h1 class="page-title">Videos</h1>
-          <p class="page-subtitle">${videos.length} videos in your library</p>
-        </div>
-
-        <div class="search-bar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="m21 21-4.35-4.35"/>
-          </svg>
-          <input type="text" id="video-search" placeholder="Search videos...">
-        </div>
-
-        ${videos.length > 0 ? `
-          <div class="media-grid" id="videos-grid">
-            ${videos.map(video => this.renderVideoCard(video)).join('')}
+        <div class="cinema-page">
+          <div class="cinema-header">
+            <h1 class="cinema-title">Videos</h1>
+            <div class="cinema-search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="m21 21-4.35-4.35"/>
+              </svg>
+              <input type="text" id="video-search" placeholder="Search...">
+            </div>
           </div>
-        ` : `
-          <div class="empty-state">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-              <polygon points="10 8 16 12 10 16 10 8"/>
-            </svg>
-            <h3>No Videos Yet</h3>
-            <p>Add video files to your media folders or upload some to get started.</p>
-            <a href="#/upload" class="btn btn-primary" style="margin-top: var(--space-lg);">Upload Videos</a>
+
+          <div class="cinema-content" id="cinema-content">
+            ${allVideos.length === 0 ? `
+              <div class="empty-state cinema-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                  <polygon points="10 8 16 12 10 16 10 8"/>
+                </svg>
+                <h3>No Videos Yet</h3>
+                <p>Add video files to your media folders or upload some to get started.</p>
+                <a href="#/upload" class="btn btn-primary">Upload Videos</a>
+              </div>
+            ` : `
+              ${categories.map(cat => `
+                <div class="cinema-row" data-category="${cat.id}">
+                  <div class="cinema-row-header">
+                    <h2 class="cinema-row-title">
+                      ${this.getCategoryIcon(cat.icon)}
+                      ${cat.name}
+                    </h2>
+                    <span class="cinema-row-count">${cat.count} ${cat.count === 1 ? 'video' : 'videos'}</span>
+                  </div>
+                  <div class="cinema-row-content" id="row-${cat.id}">
+                    <div class="cinema-scroll">
+                      <!-- Videos loaded dynamically -->
+                    </div>
+                  </div>
+                </div>
+              `).join('')}
+            `}
           </div>
-        `}
+        </div>
       `;
 
-      // Add search functionality
+      // Load videos for each category
+      for (const cat of categories) {
+        await this.loadCategoryVideos(cat.id);
+      }
+
+      // Search functionality
       const searchInput = document.getElementById('video-search');
       if (searchInput) {
         searchInput.addEventListener('input', (e) => {
-          const query = e.target.value.toLowerCase();
-          const cards = document.querySelectorAll('#videos-grid .media-card');
-          cards.forEach(card => {
-            const title = card.dataset.title.toLowerCase();
-            card.style.display = title.includes(query) ? '' : 'none';
-          });
+          this.filterVideos(e.target.value);
         });
       }
-
-      // Add click handlers
-      document.querySelectorAll('#videos-grid .media-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-          // Handle delete button click
-          const deleteBtn = e.target.closest('.delete-btn');
-          if (deleteBtn) {
-            e.stopPropagation();
-            const id = deleteBtn.dataset.id;
-            const name = deleteBtn.dataset.name;
-            confirmModal.show(name, async () => {
-              try {
-                await API.videos.delete(id);
-                this.renderVideos(); // Re-render the page
-              } catch (error) {
-                console.error('Failed to delete video:', error);
-                alert('Failed to delete video. Please try again.');
-              }
-            });
-            return;
-          }
-
-          const videoId = card.dataset.id;
-          const video = videos.find(v => v.id === videoId);
-          if (video) {
-            videoPlayer.play(video);
-          }
-        });
-      });
 
     } catch (error) {
       console.error('Failed to load videos:', error);
@@ -555,32 +576,448 @@ class App {
     }
   }
 
-  renderVideoCard(video) {
+  enterCinemaMode() {
+    document.body.classList.add('cinema-mode');
+    const musicPlayer = document.getElementById('music-player');
+    if (musicPlayer) {
+      musicPlayer.style.display = 'none';
+    }
+  }
+
+  exitCinemaMode() {
+    document.body.classList.remove('cinema-mode');
+    const musicPlayer = document.getElementById('music-player');
+    if (musicPlayer) {
+      musicPlayer.style.display = '';
+    }
+  }
+
+  getCategoryIcon(icon) {
+    const icons = {
+      film: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+        <line x1="7" y1="2" x2="7" y2="22"/>
+        <line x1="17" y1="2" x2="17" y2="22"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+        <line x1="2" y1="7" x2="7" y2="7"/>
+        <line x1="2" y1="17" x2="7" y2="17"/>
+        <line x1="17" y1="7" x2="22" y2="7"/>
+        <line x1="17" y1="17" x2="22" y2="17"/>
+      </svg>`,
+      tv: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+        <polyline points="17 2 12 7 7 2"/>
+      </svg>`,
+      video: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polygon points="23 7 16 12 23 17 23 7"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>`,
+      folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>`
+    };
+    return icons[icon] || icons.folder;
+  }
+
+  async loadCategoryVideos(categoryId) {
+    try {
+      const container = document.querySelector(`#row-${categoryId} .cinema-scroll`);
+      if (!container) return;
+
+      // Handle TV Shows differently - show as folders
+      if (categoryId === 'tvshows') {
+        const shows = await API.videos.getTVShows();
+
+        if (shows.length === 0) {
+          container.innerHTML = `
+            <div class="cinema-empty-row">
+              <p>No TV shows in this category</p>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = shows.map(show => this.renderTVShowCard(show)).join('');
+
+        // Add click handlers for TV show cards
+        container.querySelectorAll('.cinema-card.tv-show-card').forEach(card => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('.cinema-card-menu')) return;
+            const showId = card.dataset.showId;
+            const showName = card.dataset.showName;
+            this.openTVShow(showId, showName);
+          });
+        });
+
+        return;
+      }
+
+      // Regular video category
+      const videos = await API.videos.getByCategory(categoryId);
+
+      if (videos.length === 0) {
+        container.innerHTML = `
+          <div class="cinema-empty-row">
+            <p>No videos in this category</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = videos.map(video => this.renderCinemaCard(video, categoryId)).join('');
+
+      // Add click handlers
+      container.querySelectorAll('.cinema-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.cinema-card-menu')) return;
+
+          const videoId = card.dataset.id;
+          const video = videos.find(v => v.id === videoId);
+          if (video) {
+            this.playVideoImmersive(video);
+          }
+        });
+
+        // Context menu for category change
+        const menuBtn = card.querySelector('.cinema-card-menu');
+        if (menuBtn) {
+          menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showVideoContextMenu(card.dataset.id, card.dataset.name, e);
+          });
+        }
+      });
+    } catch (error) {
+      console.error(`Failed to load category ${categoryId}:`, error);
+    }
+  }
+
+  renderTVShowCard(show) {
     return `
-      <div class="media-card" data-id="${video.id}" data-title="${video.name}">
-        <button class="delete-btn" data-id="${video.id}" data-name="${video.name}" data-type="video" title="Delete video">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-        </button>
-        <div class="media-card-thumb">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-            <polygon points="10 8 16 12 10 16 10 8"/>
-          </svg>
-          <div class="media-card-play">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5 3 19 12 5 21 5 3"/>
+      <div class="cinema-card tv-show-card" data-show-id="${show.id}" data-show-name="${show.name}">
+        <div class="cinema-card-poster tv-show-poster">
+          <div class="cinema-card-overlay">
+            <div class="cinema-card-play">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </div>
+          </div>
+          <div class="cinema-card-icon tv-show-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+              <polyline points="17 2 12 7 7 2"/>
             </svg>
           </div>
+          <div class="tv-show-episode-count">${show.episodeCount} ${show.episodeCount === 1 ? 'Episode' : 'Episodes'}</div>
         </div>
-        <div class="media-card-info">
-          <div class="media-card-title">${video.name}</div>
-          <div class="media-card-meta">${this.formatFileSize(video.size)}</div>
+        <div class="cinema-card-info">
+          <div class="cinema-card-title">${show.name}</div>
+          <div class="cinema-card-meta">TV Show</div>
         </div>
       </div>
     `;
+  }
+
+  async openTVShow(showId, showName) {
+    const content = document.getElementById('cinema-content');
+    if (!content) return;
+
+    try {
+      const result = await API.videos.getTVShowEpisodes(showId);
+
+      // Store for back navigation
+      this.currentTVShowId = showId;
+      this.currentTVShowName = showName;
+
+      // Hide category rows and show episode view
+      document.querySelectorAll('.cinema-row').forEach(row => {
+        row.style.display = 'none';
+      });
+
+      // Remove any existing episode view
+      const existingView = content.querySelector('.tv-show-view');
+      if (existingView) existingView.remove();
+
+      // Create episode view
+      const episodeView = document.createElement('div');
+      episodeView.className = 'tv-show-view';
+      episodeView.innerHTML = `
+        <div class="tv-show-header">
+          <button class="tv-show-back" id="tv-show-back">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Back to Videos
+          </button>
+          <div class="tv-show-info">
+            <h1 class="tv-show-title">${showName}</h1>
+            <p class="tv-show-meta">${result.episodes.length} ${result.episodes.length === 1 ? 'Episode' : 'Episodes'}</p>
+          </div>
+        </div>
+        <div class="tv-show-episodes">
+          ${result.episodes.map(ep => this.renderEpisodeCard(ep)).join('')}
+        </div>
+      `;
+
+      content.prepend(episodeView);
+
+      // Back button handler
+      document.getElementById('tv-show-back')?.addEventListener('click', () => {
+        this.closeTVShow();
+      });
+
+      // Episode click handlers
+      episodeView.querySelectorAll('.episode-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.cinema-card-menu')) return;
+          const videoId = card.dataset.id;
+          const episode = result.episodes.find(ep => ep.id === videoId);
+          if (episode) {
+            this.playVideoImmersive(episode);
+          }
+        });
+
+        // Context menu for episode
+        const menuBtn = card.querySelector('.cinema-card-menu');
+        if (menuBtn) {
+          menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showVideoContextMenu(card.dataset.id, card.dataset.name, e);
+          });
+        }
+      });
+
+    } catch (error) {
+      console.error('Failed to load TV show episodes:', error);
+    }
+  }
+
+  renderEpisodeCard(episode) {
+    const title = episode.name.replace(/\.[^/.]+$/, '').replace(/[._-]/g, ' ');
+
+    return `
+      <div class="episode-card cinema-card" data-id="${episode.id}" data-name="${episode.name}">
+        <div class="episode-number">E${episode.episodeNumber}</div>
+        <div class="cinema-card-poster">
+          <div class="cinema-card-overlay">
+            <div class="cinema-card-play">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            </div>
+          </div>
+          <div class="cinema-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <rect x="2" y="2" width="20" height="20" rx="2"/>
+              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+            </svg>
+          </div>
+        </div>
+        <div class="cinema-card-info">
+          <div class="cinema-card-title">${title}</div>
+          <div class="cinema-card-meta">${this.formatFileSize(episode.size)}</div>
+        </div>
+        <button class="cinema-card-menu" title="Options">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="5" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <circle cx="12" cy="19" r="2"/>
+          </svg>
+        </button>
+      </div>
+    `;
+  }
+
+  closeTVShow() {
+    // Remove episode view
+    const episodeView = document.querySelector('.tv-show-view');
+    if (episodeView) episodeView.remove();
+
+    // Show category rows again
+    document.querySelectorAll('.cinema-row').forEach(row => {
+      row.style.display = '';
+    });
+
+    this.currentTVShowId = null;
+    this.currentTVShowName = null;
+  }
+
+  renderCinemaCard(video, categoryId) {
+    // Extract title from filename (remove extension)
+    const title = video.name.replace(/\.[^/.]+$/, '').replace(/[._-]/g, ' ');
+
+    return `
+      <div class="cinema-card" data-id="${video.id}" data-name="${video.name}" data-category="${categoryId}">
+        <div class="cinema-card-poster">
+          <div class="cinema-card-overlay">
+            <div class="cinema-card-play">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            </div>
+          </div>
+          <div class="cinema-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <rect x="2" y="2" width="20" height="20" rx="2"/>
+              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+            </svg>
+          </div>
+        </div>
+        <div class="cinema-card-info">
+          <div class="cinema-card-title">${title}</div>
+          <div class="cinema-card-meta">${this.formatFileSize(video.size)}</div>
+        </div>
+        <button class="cinema-card-menu" title="Options">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="5" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <circle cx="12" cy="19" r="2"/>
+          </svg>
+        </button>
+      </div>
+    `;
+  }
+
+  showVideoContextMenu(videoId, videoName, event) {
+    // Remove any existing menu
+    document.querySelectorAll('.context-menu').forEach(m => m.remove());
+
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.innerHTML = `
+      <div class="context-menu-header">${videoName}</div>
+      <div class="context-menu-divider"></div>
+      <button class="context-menu-item" data-action="category" data-category="movies">
+        ${this.getCategoryIcon('film')} Move to Movies
+      </button>
+      <button class="context-menu-item" data-action="category" data-category="tvshows">
+        ${this.getCategoryIcon('tv')} Move to TV Shows
+      </button>
+      <button class="context-menu-item" data-action="category" data-category="homevideos">
+        ${this.getCategoryIcon('video')} Move to Home Videos
+      </button>
+      <div class="context-menu-divider"></div>
+      <button class="context-menu-item danger" data-action="delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        </svg>
+        Delete
+      </button>
+    `;
+
+    // Position menu
+    menu.style.position = 'fixed';
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+
+    document.body.appendChild(menu);
+
+    // Handle clicks
+    menu.querySelectorAll('.context-menu-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const action = item.dataset.action;
+
+        if (action === 'category') {
+          const category = item.dataset.category;
+          try {
+            await API.videos.setCategory(videoId, category);
+            this.renderVideos();
+          } catch (error) {
+            console.error('Failed to move video:', error);
+          }
+        } else if (action === 'delete') {
+          confirmModal.show(videoName, async () => {
+            try {
+              await API.videos.delete(videoId);
+              this.renderVideos();
+            } catch (error) {
+              console.error('Failed to delete video:', error);
+            }
+          });
+        }
+
+        menu.remove();
+      });
+    });
+
+    // Close menu when clicking outside
+    setTimeout(() => {
+      document.addEventListener('click', function closeMenu(e) {
+        if (!menu.contains(e.target)) {
+          menu.remove();
+          document.removeEventListener('click', closeMenu);
+        }
+      });
+    }, 0);
+  }
+
+  filterVideos(query) {
+    query = query.toLowerCase().trim();
+    const content = document.getElementById('cinema-content');
+
+    if (!query) {
+      // Show all rows
+      document.querySelectorAll('.cinema-row').forEach(row => {
+        row.style.display = '';
+      });
+      document.querySelectorAll('.cinema-card').forEach(card => {
+        card.style.display = '';
+      });
+      // Remove search results if present
+      const searchResults = content.querySelector('.search-results');
+      if (searchResults) searchResults.remove();
+      return;
+    }
+
+    // Hide category rows
+    document.querySelectorAll('.cinema-row').forEach(row => {
+      row.style.display = 'none';
+    });
+
+    // Show search results
+    const filtered = this.allVideos.filter(v =>
+      v.name.toLowerCase().includes(query)
+    );
+
+    let searchResults = content.querySelector('.search-results');
+    if (!searchResults) {
+      searchResults = document.createElement('div');
+      searchResults.className = 'search-results';
+      content.prepend(searchResults);
+    }
+
+    if (filtered.length === 0) {
+      searchResults.innerHTML = `
+        <div class="cinema-empty-row">
+          <p>No videos found for "${query}"</p>
+        </div>
+      `;
+    } else {
+      searchResults.innerHTML = `
+        <h2 class="cinema-row-title">Search Results</h2>
+        <div class="cinema-grid">
+          ${filtered.map(video => this.renderCinemaCard(video, 'search')).join('')}
+        </div>
+      `;
+
+      // Add click handlers
+      searchResults.querySelectorAll('.cinema-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const videoId = card.dataset.id;
+          const video = filtered.find(v => v.id === videoId);
+          if (video) {
+            this.playVideoImmersive(video);
+          }
+        });
+      });
+    }
+  }
+
+  playVideoImmersive(video) {
+    // Use the enhanced video player
+    videoPlayer.playImmersive(video);
   }
 
   // ===== MUSIC =====
@@ -733,6 +1170,24 @@ class App {
         <div class="viz-track-item-info">
           <div class="viz-track-item-title">${title}</div>
           <div class="viz-track-item-artist">${artist}</div>
+        </div>
+        <div class="viz-track-item-actions">
+          <button class="track-action-btn btn-add-queue" data-id="${track.id}" data-index="${index}" title="Add to queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+          <button class="track-action-btn btn-add-playlist" data-id="${track.id}" title="Add to playlist">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="8" y1="6" x2="21" y2="6"/>
+              <line x1="8" y1="12" x2="21" y2="12"/>
+              <line x1="8" y1="18" x2="21" y2="18"/>
+              <line x1="3" y1="6" x2="3.01" y2="6"/>
+              <line x1="3" y1="12" x2="3.01" y2="12"/>
+              <line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>
+          </button>
         </div>
         <span class="viz-track-item-duration">${duration}</span>
       </div>
@@ -965,6 +1420,14 @@ class App {
             tracklistEsc.classList.remove('open');
           }
           break;
+        case 'q':
+          // Open queue modal
+          queueModal.show();
+          break;
+        case 'p':
+          // Open playlists
+          this.showPlaylistsPanel();
+          break;
       }
     };
     document.addEventListener('keydown', this.musicKeyHandler);
@@ -994,7 +1457,9 @@ class App {
     // Track list items
     document.querySelectorAll('.viz-track-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        // Check for right-click or context menu for delete
+        // Don't trigger if clicking on action buttons
+        if (e.target.closest('.viz-track-item-actions')) return;
+
         const index = parseInt(item.dataset.index);
         musicPlayer.setQueue(tracks, index);
 
@@ -1018,6 +1483,32 @@ class App {
             alert('Failed to delete track.');
           }
         });
+      });
+    });
+
+    // Add to queue buttons
+    document.querySelectorAll('.btn-add-queue').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.dataset.index);
+        const track = tracks[index];
+        if (track) {
+          musicPlayer.addToQueue(track);
+          // Visual feedback
+          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`;
+          setTimeout(() => {
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+          }, 1000);
+        }
+      });
+    });
+
+    // Add to playlist buttons
+    document.querySelectorAll('.btn-add-playlist').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const trackId = btn.dataset.id;
+        playlistModal.show([trackId]);
       });
     });
   }
@@ -1054,6 +1545,241 @@ class App {
           <div class="media-card-title">${title}</div>
           <div class="media-card-meta">${artist}</div>
         </div>
+      </div>
+    `;
+  }
+
+  // ===== PLAYLISTS =====
+  showPlaylistsPanel() {
+    router.navigate('/playlists');
+  }
+
+  async renderPlaylists() {
+    this.cleanup();
+    const content = document.getElementById('page-content');
+
+    try {
+      const playlists = await API.music.getPlaylists();
+
+      content.innerHTML = `
+        <div class="page-header">
+          <h1 class="page-title">Playlists</h1>
+          <div class="page-actions">
+            <button class="btn btn-primary" id="create-playlist-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Create Playlist
+            </button>
+          </div>
+        </div>
+
+        ${playlists.length === 0 ? `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+            <h3>No Playlists Yet</h3>
+            <p>Create your first playlist to organize your music</p>
+          </div>
+        ` : `
+          <div class="playlists-grid">
+            ${playlists.map(playlist => `
+              <div class="playlist-card" data-id="${playlist.id}">
+                <div class="playlist-card-cover">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 18V5l12-2v13"/>
+                    <circle cx="6" cy="18" r="3"/>
+                    <circle cx="18" cy="16" r="3"/>
+                  </svg>
+                </div>
+                <div class="playlist-card-info">
+                  <div class="playlist-card-name">${playlist.name}</div>
+                  <div class="playlist-card-count">${playlist.tracks.length} tracks</div>
+                </div>
+                <button class="playlist-card-delete" data-id="${playlist.id}" title="Delete playlist">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `;
+
+      // Create playlist button
+      document.getElementById('create-playlist-btn')?.addEventListener('click', () => {
+        const name = prompt('Enter playlist name:');
+        if (name && name.trim()) {
+          API.music.createPlaylist(name.trim())
+            .then(() => this.renderPlaylists())
+            .catch(err => alert('Failed to create playlist'));
+        }
+      });
+
+      // Playlist card click handlers
+      document.querySelectorAll('.playlist-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (!e.target.closest('.playlist-card-delete')) {
+            router.navigate(`/playlists/${card.dataset.id}`);
+          }
+        });
+      });
+
+      // Delete playlist buttons
+      document.querySelectorAll('.playlist-card-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const playlistId = btn.dataset.id;
+          const playlist = playlists.find(p => p.id === playlistId);
+          confirmModal.show(playlist.name, async () => {
+            try {
+              await API.music.deletePlaylist(playlistId);
+              this.renderPlaylists();
+            } catch (error) {
+              console.error('Failed to delete playlist:', error);
+            }
+          });
+        });
+      });
+
+    } catch (error) {
+      console.error('Failed to load playlists:', error);
+      router.showError('Failed to load playlists');
+    }
+  }
+
+  async renderPlaylist(playlistId) {
+    this.cleanup();
+    const content = document.getElementById('page-content');
+
+    try {
+      const [playlist, allTracks] = await Promise.all([
+        API.music.getPlaylist(playlistId),
+        API.music.getAll()
+      ]);
+
+      // Get full track info for playlist tracks
+      const playlistTracks = playlist.tracks
+        .map(trackId => allTracks.find(t => t.id === trackId))
+        .filter(t => t); // Remove any null tracks
+
+      content.innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-back" id="back-to-playlists">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Back
+          </button>
+          <h1 class="page-title">${playlist.name}</h1>
+          <div class="page-actions">
+            <span class="photo-count">${playlistTracks.length} tracks</span>
+            <button class="btn btn-primary" id="play-playlist-btn">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              Play All
+            </button>
+          </div>
+        </div>
+
+        ${playlistTracks.length === 0 ? `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+            <h3>Empty Playlist</h3>
+            <p>Add tracks from the music page to this playlist</p>
+          </div>
+        ` : `
+          <div class="playlist-tracks">
+            ${playlistTracks.map((track, index) => this.renderPlaylistTrack(track, index, playlistId)).join('')}
+          </div>
+        `}
+      `;
+
+      this.currentPlaylistTracks = playlistTracks;
+      this.currentPlaylistId = playlistId;
+
+      // Back button
+      document.getElementById('back-to-playlists')?.addEventListener('click', () => {
+        router.navigate('/playlists');
+      });
+
+      // Play all button
+      document.getElementById('play-playlist-btn')?.addEventListener('click', () => {
+        if (playlistTracks.length > 0) {
+          musicPlayer.setQueue(playlistTracks, 0);
+        }
+      });
+
+      // Track click handlers
+      document.querySelectorAll('.playlist-track').forEach(item => {
+        item.addEventListener('click', (e) => {
+          if (e.target.closest('.playlist-track-remove')) return;
+
+          const index = parseInt(item.dataset.index);
+          musicPlayer.setQueue(playlistTracks, index);
+        });
+      });
+
+      // Remove from playlist buttons
+      document.querySelectorAll('.playlist-track-remove').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const trackId = btn.dataset.id;
+          try {
+            await API.music.removeFromPlaylist(playlistId, [trackId]);
+            this.renderPlaylist(playlistId);
+          } catch (error) {
+            console.error('Failed to remove track:', error);
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Failed to load playlist:', error);
+      router.showError('Failed to load playlist');
+    }
+  }
+
+  renderPlaylistTrack(track, index, playlistId) {
+    const title = track.metadata?.title || track.name;
+    const artist = track.metadata?.artist || 'Unknown Artist';
+    const duration = track.metadata?.duration ? this.formatDuration(track.metadata.duration) : '--:--';
+
+    return `
+      <div class="playlist-track" data-index="${index}" data-id="${track.id}">
+        <span class="playlist-track-num">${String(index + 1).padStart(2, '0')}</span>
+        <div class="playlist-track-thumb">
+          ${track.metadata?.hasCover ?
+            `<img src="${API.music.getCoverUrl(track.id)}" alt="">` :
+            `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>`
+          }
+        </div>
+        <div class="playlist-track-info">
+          <div class="playlist-track-title">${title}</div>
+          <div class="playlist-track-artist">${artist}</div>
+        </div>
+        <span class="playlist-track-duration">${duration}</span>
+        <button class="playlist-track-remove" data-id="${track.id}" title="Remove from playlist">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
       </div>
     `;
   }
@@ -1251,12 +1977,6 @@ class App {
 
     return `
       <div class="photo-grid-item ${sizeClass}" data-id="${photo.id}" data-index="${photo.globalIndex}" data-name="${photo.name}">
-        <button class="delete-btn" data-id="${photo.id}" data-name="${photo.name}" title="Delete photo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-        </button>
         <img src="${API.photos.getThumbUrl(photo.id)}" alt="${photo.name}" loading="lazy">
         <div class="photo-item-info">${photo.name}</div>
       </div>
@@ -1265,25 +1985,7 @@ class App {
 
   attachPhotoClickHandlers() {
     document.querySelectorAll('.photo-grid-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        // Handle delete button click
-        const deleteBtn = e.target.closest('.delete-btn');
-        if (deleteBtn) {
-          e.stopPropagation();
-          const id = deleteBtn.dataset.id;
-          const name = deleteBtn.dataset.name;
-          confirmModal.show(name, async () => {
-            try {
-              await API.photos.delete(id);
-              this.renderPhotos(); // Re-render the page
-            } catch (error) {
-              console.error('Failed to delete photo:', error);
-              alert('Failed to delete photo. Please try again.');
-            }
-          });
-          return;
-        }
-
+      item.addEventListener('click', () => {
         const index = parseInt(item.dataset.index);
         lightbox.open(this.photos, index, (deletedPhoto, deletedIndex) => {
           // Re-render photos page after deletion
@@ -1302,12 +2004,6 @@ class App {
       container.className = 'photo-grid';
       container.innerHTML = this.photos.map((photo, index) => `
         <div class="photo-grid-item" data-id="${photo.id}" data-index="${index}" data-name="${photo.name}">
-          <button class="delete-btn" data-id="${photo.id}" data-name="${photo.name}" title="Delete photo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
-          </button>
           <img src="${API.photos.getThumbUrl(photo.id)}" alt="${photo.name}" loading="lazy">
           <div class="photo-item-info">${photo.name}</div>
         </div>
@@ -1575,6 +2271,293 @@ class App {
     } catch (error) {
       console.error('Failed to load settings:', error);
       router.showError('Failed to load settings');
+    }
+  }
+
+  // ===== ALBUMS =====
+  async renderAlbums() {
+    this.cleanup();
+    const content = document.getElementById('page-content');
+
+    try {
+      const albums = await API.albums.getAll();
+      const people = await API.photos.getAllPeople();
+
+      content.innerHTML = `
+        <div class="page-header">
+          <h1 class="page-title">Albums</h1>
+          <div class="page-actions">
+            <button class="btn btn-primary" id="create-album-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Create Album
+            </button>
+          </div>
+        </div>
+
+        ${people.length > 0 ? `
+          <div class="people-section">
+            <h2 class="section-title">People</h2>
+            <div class="people-pills">
+              ${people.map(name => `
+                <button class="people-pill" data-person="${name}">${name}</button>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="section-title">Your Albums</div>
+        ${albums.length === 0 ? `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <path d="M2 8h20"/>
+            </svg>
+            <h3>No Albums Yet</h3>
+            <p>Create your first album to organize your photos</p>
+          </div>
+        ` : `
+          <div class="albums-grid">
+            ${albums.map(album => `
+              <div class="album-card" data-id="${album.id}">
+                <div class="album-card-cover">
+                  ${album.coverPhotoId ? `
+                    <img src="${API.photos.getThumbUrl(album.coverPhotoId)}" alt="${album.name}">
+                  ` : `
+                    <div class="album-card-empty">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                      </svg>
+                    </div>
+                  `}
+                </div>
+                <div class="album-card-info">
+                  <div class="album-card-name">${album.name}</div>
+                  <div class="album-card-count">${album.photoIds.length} photos</div>
+                </div>
+                <button class="album-delete-btn" data-id="${album.id}" title="Delete album">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `;
+
+      // Create album button
+      document.getElementById('create-album-btn')?.addEventListener('click', () => {
+        this.showCreateAlbumDialog();
+      });
+
+      // Album card click handlers
+      document.querySelectorAll('.album-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (!e.target.closest('.album-delete-btn')) {
+            router.navigate(`/albums/${card.dataset.id}`);
+          }
+        });
+      });
+
+      // Delete album buttons
+      document.querySelectorAll('.album-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const albumId = btn.dataset.id;
+          const album = albums.find(a => a.id === albumId);
+          confirmModal.show(album.name, async () => {
+            try {
+              await API.albums.delete(albumId);
+              this.renderAlbums();
+            } catch (error) {
+              console.error('Failed to delete album:', error);
+            }
+          });
+        });
+      });
+
+      // People pill click handlers
+      document.querySelectorAll('.people-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          this.showPhotosByPerson(pill.dataset.person);
+        });
+      });
+
+    } catch (error) {
+      console.error('Failed to load albums:', error);
+      router.showError('Failed to load albums');
+    }
+  }
+
+  showCreateAlbumDialog() {
+    const name = prompt('Enter album name:');
+    if (name && name.trim()) {
+      API.albums.create(name.trim())
+        .then(() => this.renderAlbums())
+        .catch(err => alert('Failed to create album'));
+    }
+  }
+
+  async showPhotosByPerson(personName) {
+    const content = document.getElementById('page-content');
+    router.showLoading();
+
+    try {
+      const photos = await API.photos.getByPerson(personName);
+
+      // Add global index to each photo
+      photos.forEach((photo, index) => {
+        photo.globalIndex = index;
+      });
+
+      this.photos = photos;
+
+      content.innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-back" id="back-to-albums">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Back
+          </button>
+          <h1 class="page-title">Photos of ${personName}</h1>
+          <div class="page-actions">
+            <span class="photo-count">${photos.length} photos</span>
+          </div>
+        </div>
+
+        ${photos.length === 0 ? `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <h3>No Photos</h3>
+            <p>No photos tagged with ${personName}</p>
+          </div>
+        ` : `
+          <div class="photo-grid" id="person-photos-container">
+            ${photos.map((photo, index) => `
+              <div class="photo-grid-item" data-id="${photo.id}" data-index="${index}">
+                <img src="${API.photos.getThumbUrl(photo.id)}" alt="${photo.name}" loading="lazy">
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `;
+
+      // Back button
+      document.getElementById('back-to-albums')?.addEventListener('click', () => {
+        router.navigate('/albums');
+      });
+
+      // Photo click handlers
+      document.querySelectorAll('.photo-grid-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const index = parseInt(item.dataset.index);
+          lightbox.open(this.photos, index);
+        });
+      });
+
+    } catch (error) {
+      console.error('Failed to load photos:', error);
+      router.showError('Failed to load photos');
+    }
+  }
+
+  async renderAlbum(albumId) {
+    this.cleanup();
+    const content = document.getElementById('page-content');
+
+    try {
+      const album = await API.albums.get(albumId);
+
+      // Add global index to each photo
+      album.photos.forEach((photo, index) => {
+        photo.globalIndex = index;
+      });
+
+      this.photos = album.photos;
+      this.currentAlbum = album;
+
+      content.innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-back" id="back-to-albums">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Back
+          </button>
+          <h1 class="page-title">${album.name}</h1>
+          <div class="page-actions">
+            <span class="photo-count">${album.photos.length} photos</span>
+          </div>
+        </div>
+
+        ${album.photos.length === 0 ? `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21 15 16 10 5 21"/>
+            </svg>
+            <h3>No Photos</h3>
+            <p>This album is empty. Open photos and use the album button to add them here.</p>
+          </div>
+        ` : `
+          <div class="photo-grid" id="album-photos-container">
+            ${album.photos.map((photo, index) => `
+              <div class="photo-grid-item" data-id="${photo.id}" data-index="${index}">
+                <img src="${API.photos.getThumbUrl(photo.id)}" alt="${photo.name}" loading="lazy">
+                <button class="photo-remove-btn" data-id="${photo.id}" title="Remove from album">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `;
+
+      // Back button
+      document.getElementById('back-to-albums')?.addEventListener('click', () => {
+        router.navigate('/albums');
+      });
+
+      // Photo click handlers
+      document.querySelectorAll('.photo-grid-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          if (!e.target.closest('.photo-remove-btn')) {
+            const index = parseInt(item.dataset.index);
+            lightbox.open(this.photos, index);
+          }
+        });
+      });
+
+      // Remove from album buttons
+      document.querySelectorAll('.photo-remove-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await API.albums.removePhotos(albumId, [btn.dataset.id]);
+            this.renderAlbum(albumId);
+          } catch (error) {
+            console.error('Failed to remove photo:', error);
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Failed to load album:', error);
+      router.showError('Failed to load album');
     }
   }
 
