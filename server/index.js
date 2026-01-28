@@ -30,6 +30,73 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Live terminal activity logger ──────────────────────────────────────
+const LOG_COLORS = {
+  GET:    '\x1b[36m',   // cyan
+  POST:   '\x1b[32m',   // green
+  PUT:    '\x1b[33m',   // yellow
+  DELETE: '\x1b[31m',   // red
+  reset:  '\x1b[0m',
+  dim:    '\x1b[2m',
+  bright: '\x1b[1m',
+  magenta:'\x1b[35m',
+};
+
+const MEDIA_ICONS = {
+  video:  '▶ ',
+  music:  '♫ ',
+  photo:  '◩ ',
+  upload: '⬆ ',
+  system: '⚙ ',
+  other:  '● ',
+};
+
+function classifyRequest(url) {
+  if (url.startsWith('/api/videos'))  return 'video';
+  if (url.startsWith('/api/music'))   return 'music';
+  if (url.startsWith('/api/photos'))  return 'photo';
+  if (url.startsWith('/api/upload'))  return 'upload';
+  if (url.startsWith('/api/system') || url.startsWith('/api/stats') || url.startsWith('/api/settings')) return 'system';
+  return 'other';
+}
+
+let requestCount = 0;
+
+app.use((req, res, next) => {
+  if (!req.url.startsWith('/api/')) return next();
+
+  const start = Date.now();
+  requestCount++;
+  const id = requestCount;
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const category = classifyRequest(req.url);
+    const icon = MEDIA_ICONS[category];
+    const method = req.method;
+    const color = LOG_COLORS[method] || LOG_COLORS.reset;
+    const status = res.statusCode;
+    const statusColor = status < 300 ? '\x1b[32m' : status < 400 ? '\x1b[33m' : '\x1b[31m';
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const ip = req.ip === '::1' || req.ip === '::ffff:127.0.0.1' ? 'local' : req.ip;
+
+    const line = [
+      `${LOG_COLORS.dim}${time}${LOG_COLORS.reset}`,
+      `${LOG_COLORS.magenta}#${String(id).padStart(4, '0')}${LOG_COLORS.reset}`,
+      `${icon}`,
+      `${color}${method.padEnd(6)}${LOG_COLORS.reset}`,
+      `${statusColor}${status}${LOG_COLORS.reset}`,
+      `${LOG_COLORS.dim}${String(duration).padStart(4)}ms${LOG_COLORS.reset}`,
+      `${req.url}`,
+      `${LOG_COLORS.dim}← ${ip}${LOG_COLORS.reset}`,
+    ].join(' ');
+
+    console.log(line);
+  });
+
+  next();
+});
+
 // API Routes
 app.use('/api/videos', videosRouter);
 app.use('/api/music', musicRouter);
