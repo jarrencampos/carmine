@@ -13,6 +13,82 @@ class App {
 
     // Load initial stats
     this.loadStats();
+
+    // Load saved theme color
+    this.loadThemeColor();
+  }
+
+  async loadThemeColor() {
+    try {
+      const settings = await API.settings.get();
+      if (settings.theme?.accentColor) {
+        this.applyThemeColor(settings.theme.accentColor);
+      }
+    } catch (error) {
+      console.error('Failed to load theme color:', error);
+    }
+  }
+
+  applyThemeColor(hexColor) {
+    const root = document.documentElement;
+
+    // Parse hex to RGB
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+
+    // Calculate lighter and darker variants
+    const lighten = (value, amount) => Math.min(255, value + amount);
+    const darken = (value, amount) => Math.max(0, value - amount);
+
+    const lightR = lighten(r, 40);
+    const lightG = lighten(g, 40);
+    const lightB = lighten(b, 40);
+
+    const darkR = darken(r, 50);
+    const darkG = darken(g, 50);
+    const darkB = darken(b, 50);
+
+    const toHex = (r, g, b) => '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+
+    // Update CSS variables
+    root.style.setProperty('--carmine', hexColor);
+    root.style.setProperty('--carmine-light', toHex(lightR, lightG, lightB));
+    root.style.setProperty('--carmine-dark', toHex(darkR, darkG, darkB));
+    root.style.setProperty('--carmine-glow', hexColor);
+    root.style.setProperty('--carmine-muted', toHex(Math.floor(r * 0.2), Math.floor(g * 0.2), Math.floor(b * 0.2)));
+
+    // Update text colors
+    root.style.setProperty('--text-primary', hexColor);
+    root.style.setProperty('--text-secondary', toHex(darkR, darkG, darkB));
+    root.style.setProperty('--text-muted', toHex(Math.floor(r * 0.4), Math.floor(g * 0.4), Math.floor(b * 0.4)));
+    root.style.setProperty('--text-accent', hexColor);
+    root.style.setProperty('--text-data', hexColor);
+
+    // Update borders
+    root.style.setProperty('--border', `rgba(${r}, ${g}, ${b}, 0.3)`);
+    root.style.setProperty('--border-light', `rgba(${r}, ${g}, ${b}, 0.5)`);
+    root.style.setProperty('--border-strong', `rgba(${r}, ${g}, ${b}, 0.7)`);
+
+    // Update glass effects
+    root.style.setProperty('--glass', `rgba(${r}, ${g}, ${b}, 0.05)`);
+    root.style.setProperty('--glass-heavy', `rgba(${r}, ${g}, ${b}, 0.1)`);
+
+    // Update gradients
+    root.style.setProperty('--gradient-carmine', `linear-gradient(135deg, ${toHex(darkR, darkG, darkB)} 0%, ${hexColor} 100%)`);
+    root.style.setProperty('--gradient-glow', `radial-gradient(ellipse at center, rgba(${r}, ${g}, ${b}, 0.1) 0%, transparent 70%)`);
+    root.style.setProperty('--gradient-chart', `linear-gradient(180deg, rgba(${r}, ${g}, ${b}, 0.4) 0%, rgba(${r}, ${g}, ${b}, 0.05) 100%)`);
+
+    // Update shadows
+    root.style.setProperty('--shadow-glow', `0 0 20px rgba(${r}, ${g}, ${b}, 0.4)`);
+    root.style.setProperty('--shadow-glow-strong', `0 0 40px rgba(${r}, ${g}, ${b}, 0.6)`);
+
+    // Update background colors with tint
+    root.style.setProperty('--bg-secondary', `rgb(${Math.floor(r * 0.02)}, ${Math.floor(g * 0.02)}, ${Math.floor(b * 0.02)})`);
+    root.style.setProperty('--bg-tertiary', `rgb(${Math.floor(r * 0.04)}, ${Math.floor(g * 0.04)}, ${Math.floor(b * 0.04)})`);
+    root.style.setProperty('--bg-hover', `rgb(${Math.floor(r * 0.08)}, ${Math.floor(g * 0.08)}, ${Math.floor(b * 0.08)})`);
+    root.style.setProperty('--bg-elevated', `rgb(${Math.floor(r * 0.03)}, ${Math.floor(g * 0.03)}, ${Math.floor(b * 0.03)})`);
+    root.style.setProperty('--bg-panel', `rgb(${Math.floor(r * 0.01)}, ${Math.floor(g * 0.01)}, ${Math.floor(b * 0.01)})`);
   }
 
   // Cleanup method to clear intervals and event listeners when navigating away
@@ -1122,7 +1198,7 @@ class App {
                 <button class="viz-tracklist-close" id="viz-tracklist-close">X</button>
               </div>
               <div class="viz-tracklist-content" id="viz-tracklist-content">
-                ${tracks.map((track, index) => this.renderVizTrackItem(track, index)).join('')}
+                ${this.renderArtistFolders(tracks)}
               </div>
             </div>
           </div>
@@ -1158,18 +1234,57 @@ class App {
     }
   }
 
+  groupTracksByArtist(tracks) {
+    const grouped = {};
+    tracks.forEach((track, index) => {
+      const artist = track.metadata?.artist || 'Unknown Artist';
+      if (!grouped[artist]) {
+        grouped[artist] = [];
+      }
+      grouped[artist].push({ ...track, originalIndex: index });
+    });
+    // Sort artists alphabetically, but put "Unknown Artist" at the end
+    const sortedArtists = Object.keys(grouped).sort((a, b) => {
+      if (a === 'Unknown Artist') return 1;
+      if (b === 'Unknown Artist') return -1;
+      return a.localeCompare(b);
+    });
+    return { grouped, sortedArtists };
+  }
+
+  renderArtistFolders(tracks) {
+    const { grouped, sortedArtists } = this.groupTracksByArtist(tracks);
+
+    return sortedArtists.map(artist => {
+      const artistTracks = grouped[artist];
+      const trackCount = artistTracks.length;
+      const totalDuration = artistTracks.reduce((sum, t) => sum + (t.metadata?.duration || 0), 0);
+
+      return `
+        <div class="viz-artist-folder" data-artist="${artist}">
+          <div class="viz-artist-header">
+            <span class="viz-artist-toggle">▶</span>
+            <span class="viz-artist-name">${artist}</span>
+            <span class="viz-artist-meta">${trackCount} track${trackCount !== 1 ? 's' : ''} · ${this.formatDuration(totalDuration)}</span>
+          </div>
+          <div class="viz-artist-tracks">
+            ${artistTracks.map(track => this.renderVizTrackItem(track, track.originalIndex)).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
   renderVizTrackItem(track, index) {
     const title = track.metadata?.title || track.name;
-    const artist = track.metadata?.artist || 'Unknown';
+    const artist = track.metadata?.artist || 'Unknown Artist';
     const duration = track.metadata?.duration ? this.formatDuration(track.metadata.duration) : '--:--';
     const isActive = musicPlayer.currentIndex === index;
 
     return `
       <div class="viz-track-item ${isActive ? 'active' : ''}" data-index="${index}" data-id="${track.id}" data-name="${title}">
-        <span class="viz-track-item-num">${String(index + 1).padStart(2, '0')}</span>
         <div class="viz-track-item-info">
           <div class="viz-track-item-title">${title}</div>
-          <div class="viz-track-item-artist">${artist}</div>
         </div>
         <div class="viz-track-item-actions">
           <button class="track-action-btn btn-add-queue" data-id="${track.id}" data-index="${index}" title="Add to queue">
@@ -1453,6 +1568,14 @@ class App {
     if (closeBtn && tracklist) {
       closeBtn.addEventListener('click', () => tracklist.classList.remove('open'));
     }
+
+    // Artist folder toggles
+    document.querySelectorAll('.viz-artist-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const folder = header.closest('.viz-artist-folder');
+        folder.classList.toggle('open');
+      });
+    });
 
     // Track list items
     document.querySelectorAll('.viz-track-item').forEach(item => {
@@ -2153,6 +2276,21 @@ class App {
         </div>
 
         <div class="settings-section">
+          <h3 class="settings-section-title">Appearance</h3>
+          <div class="settings-row">
+            <div class="settings-label">
+              Accent Color
+              <small>Main theme color for the interface</small>
+            </div>
+            <div class="color-picker-wrapper">
+              <input type="color" class="color-picker-input" id="accent-color" value="${settings.theme?.accentColor || '#ff0a0a'}">
+              <input type="text" class="settings-input color-hex-input" id="accent-color-hex" value="${settings.theme?.accentColor || '#ff0a0a'}" placeholder="#ff0a0a">
+              <button class="btn btn-secondary" id="reset-color-btn">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <h3 class="settings-section-title">Video Directories</h3>
           <div class="path-list" id="video-paths">
             ${settings.media.videos.map(p => `
@@ -2266,6 +2404,60 @@ class App {
             btn.disabled = false;
           }, 2000);
         }
+      });
+
+      // Color picker handlers
+      const colorPicker = document.getElementById('accent-color');
+      const colorHexInput = document.getElementById('accent-color-hex');
+      const resetColorBtn = document.getElementById('reset-color-btn');
+      const defaultColor = '#ff0a0a';
+
+      const saveAndApplyColor = async (color) => {
+        this.applyThemeColor(color);
+        try {
+          await API.settings.update({ theme: { accentColor: color } });
+        } catch (error) {
+          console.error('Failed to save color:', error);
+        }
+      };
+
+      colorPicker.addEventListener('input', (e) => {
+        const color = e.target.value;
+        colorHexInput.value = color;
+        this.applyThemeColor(color);
+      });
+
+      colorPicker.addEventListener('change', (e) => {
+        saveAndApplyColor(e.target.value);
+      });
+
+      colorHexInput.addEventListener('input', (e) => {
+        let color = e.target.value;
+        if (!color.startsWith('#')) {
+          color = '#' + color;
+        }
+        if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+          colorPicker.value = color;
+          this.applyThemeColor(color);
+        }
+      });
+
+      colorHexInput.addEventListener('change', (e) => {
+        let color = e.target.value;
+        if (!color.startsWith('#')) {
+          color = '#' + color;
+        }
+        if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+          saveAndApplyColor(color);
+        } else {
+          colorHexInput.value = colorPicker.value;
+        }
+      });
+
+      resetColorBtn.addEventListener('click', () => {
+        colorPicker.value = defaultColor;
+        colorHexInput.value = defaultColor;
+        saveAndApplyColor(defaultColor);
       });
 
     } catch (error) {
