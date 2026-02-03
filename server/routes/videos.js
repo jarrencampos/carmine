@@ -3,10 +3,76 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execSync, spawn } = require('child_process');
 const { scanDirectory } = require('../utils/fileScanner');
 
 // Helper: Get path for categories file
 const getCategoriesPath = () => path.resolve(__dirname, '../../config/video-categories.json');
+
+// Helper: Get path for thumbnails directory
+const getThumbsDir = () => {
+  const dir = path.resolve(__dirname, '../../cache/thumbnails');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+};
+
+// Check if ffmpeg is available
+let ffmpegAvailable = false;
+try {
+  execSync('ffmpeg -version', { stdio: 'ignore' });
+  ffmpegAvailable = true;
+} catch (e) {
+  console.log('ffmpeg not found - video thumbnails will use placeholders');
+}
+
+// Thumbnail generation queue to limit concurrent ffmpeg processes
+const thumbQueue = [];
+let activeThumbJobs = 0;
+const MAX_THUMB_JOBS = 3;
+
+function runThumbJob(filePath, thumbPath) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeThumbJobs++;
+      const ffmpegProcess = spawn('ffmpeg', [
+        '-ss', '00:00:05',
+        '-i', filePath,
+        '-vframes', '1',
+        '-vf', 'scale=320:-1',
+        '-q:v', '5',
+        '-y',
+        thumbPath
+      ], { stdio: 'ignore' });
+
+      ffmpegProcess.on('close', (code) => {
+        activeThumbJobs--;
+        processThumbQueue();
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited with code ${code}`));
+      });
+      ffmpegProcess.on('error', (err) => {
+        activeThumbJobs--;
+        processThumbQueue();
+        reject(err);
+      });
+    };
+
+    if (activeThumbJobs < MAX_THUMB_JOBS) {
+      run();
+    } else {
+      thumbQueue.push(run);
+    }
+  });
+}
+
+function processThumbQueue() {
+  while (thumbQueue.length > 0 && activeThumbJobs < MAX_THUMB_JOBS) {
+    const job = thumbQueue.shift();
+    job();
+  }
+}
 
 // Helper: Read JSON file with default
 function readJsonFile(filePath, defaultValue = {}) {
@@ -32,49 +98,171 @@ const defaultCategories = {
     { id: 'tvshows', name: 'TV Shows', icon: 'tv' },
     { id: 'homevideos', name: 'Home Videos', icon: 'video' }
   ],
-  videoAssignments: {} // { videoId: categoryId }
+  videoAssignments: {}, // { videoId: categoryId }
+  folders: [], // [{ id, name, categoryId, createdAt }]
+  folderAssignments: {} // { videoId: folderId }
 };
 
+// ============ BROWSE (Folder-based) ============
+
+// Browse endpoint - filesystem folder browser
+router.get('/browse', async (req, res) => {
+  try {
+    const relativePath = (req.query.path || '').replace(/\\/g, '/');
+
+    // Security: prevent path traversal
+    if (relativePath.includes('..') || path.isAbsolute(relativePath)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    // Resolve against the first configured media videos directory
+    const mediaRoot = path.resolve(__dirname, '../..', req.config.media.videos[0]);
+
+    const targetDir = relativePath
+      ? path.resolve(mediaRoot, relativePath)
+      : mediaRoot;
+
+    // Security: ensure resolved path is within media root
+    const normalizedTarget = path.normalize(targetDir);
+    const normalizedRoot = path.normalize(mediaRoot);
+    if (!normalizedTarget.startsWith(normalizedRoot)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    // Build breadcrumb
+    const breadcrumb = [{ name: 'Videos', path: '' }];
+    if (relativePath) {
+      const parts = relativePath.split('/').filter(Boolean);
+      let accumulated = '';
+      for (const part of parts) {
+        accumulated = accumulated ? `${accumulated}/${part}` : part;
+        breadcrumb.push({ name: part, path: accumulated });
+      }
+    }
+
+    // Read immediate children
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    const folders = [];
+    const videos = [];
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+
+      const fullPath = path.join(targetDir, entry.name);
+
+      if (entry.isDirectory()) {
+        // Count items in this subfolder (non-recursive, just immediate children)
+        let itemCount = 0;
+        try {
+          const subEntries = fs.readdirSync(fullPath, { withFileTypes: true });
+          itemCount = subEntries.filter(e => !e.name.startsWith('.')).length;
+        } catch (e) { /* ignore permission errors */ }
+
+        const folderRelPath = relativePath
+          ? `${relativePath}/${entry.name}`
+          : entry.name;
+
+        folders.push({
+          name: entry.name,
+          path: folderRelPath,
+          itemCount
+        });
+      } else if (entry.isFile()) {
+        const mediaType = require('../utils/fileScanner').getMediaType(entry.name);
+        if (mediaType === 'video') {
+          const stats = fs.statSync(fullPath);
+          videos.push({
+            id: Buffer.from(fullPath).toString('base64url'),
+            name: entry.name,
+            path: fullPath,
+            size: stats.size,
+            modified: stats.mtime
+          });
+        }
+      }
+    }
+
+    // Sort folders alphabetically, videos by modified date (newest first)
+    folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    videos.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+    res.json({
+      currentPath: relativePath,
+      breadcrumb,
+      folders,
+      videos
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ CATEGORIES ============
+
+// Category folder mapping
+const categoryFolders = {
+  'movies': ['movies'],
+  'tvshows': ['tv-shows', 'tvshows', 'tv shows'],
+  'homevideos': ['home-videos', 'homevideos', 'home videos']
+};
+
+// Helper: Get category from path
+function getCategoryFromPath(videoPath, mediaRoot) {
+  const relativePath = path.relative(mediaRoot, videoPath);
+  const parts = relativePath.split(path.sep);
+
+  if (parts.length > 0) {
+    const topFolder = parts[0].toLowerCase();
+    for (const [categoryId, folderNames] of Object.entries(categoryFolders)) {
+      if (folderNames.includes(topFolder)) {
+        return categoryId;
+      }
+    }
+  }
+  return 'uncategorized';
+}
 
 // Get all categories with video counts
 router.get('/categories', async (req, res) => {
   try {
-    const data = readJsonFile(getCategoriesPath(), defaultCategories);
-
-    // Get all videos
+    // Get all videos with their paths
     const videos = [];
     for (const dir of req.config.media.videos) {
       const resolved = path.resolve(__dirname, '../..', dir);
       if (fs.existsSync(resolved)) {
         const files = await scanDirectory(resolved, 'video');
+        files.forEach(f => f.mediaRoot = resolved);
         videos.push(...files);
       }
     }
 
-    // Count videos per category
-    const counts = {};
-    data.categories.forEach(cat => counts[cat.id] = 0);
-    counts['uncategorized'] = 0;
+    // Count videos per category based on folder structure
+    const counts = {
+      'movies': 0,
+      'tvshows': 0,
+      'homevideos': 0,
+      'uncategorized': 0
+    };
 
     videos.forEach(video => {
-      const categoryId = data.videoAssignments[video.id];
-      if (categoryId && counts[categoryId] !== undefined) {
-        counts[categoryId]++;
-      } else {
-        counts['uncategorized']++;
-      }
+      const categoryId = getCategoryFromPath(video.path, video.mediaRoot);
+      counts[categoryId]++;
     });
 
-    // Return categories with counts
-    const categoriesWithCounts = data.categories.map(cat => ({
-      ...cat,
-      count: counts[cat.id]
-    }));
+    // Build categories list
+    const categories = [
+      { id: 'movies', name: 'Movies', icon: 'film', count: counts['movies'] },
+      { id: 'tvshows', name: 'TV Shows', icon: 'tv', count: counts['tvshows'] },
+      { id: 'homevideos', name: 'Home Videos', icon: 'video', count: counts['homevideos'] }
+    ];
 
     // Add uncategorized if there are any
     if (counts['uncategorized'] > 0) {
-      categoriesWithCounts.push({
+      categories.push({
         id: 'uncategorized',
         name: 'Uncategorized',
         icon: 'folder',
@@ -82,40 +270,81 @@ router.get('/categories', async (req, res) => {
       });
     }
 
-    res.json(categoriesWithCounts);
+    res.json(categories);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get videos by category
+// Get videos by category (with filesystem folder detection)
 router.get('/categories/:categoryId', async (req, res) => {
   try {
     const { categoryId } = req.params;
-    const data = readJsonFile(getCategoriesPath(), defaultCategories);
 
-    // Get all videos
+    // Get all videos with their base directories
     const videos = [];
     for (const dir of req.config.media.videos) {
       const resolved = path.resolve(__dirname, '../..', dir);
       if (fs.existsSync(resolved)) {
         const files = await scanDirectory(resolved, 'video');
+        files.forEach(f => f.mediaRoot = resolved);
         videos.push(...files);
       }
     }
 
-    // Filter by category
-    let filtered;
-    if (categoryId === 'uncategorized') {
-      filtered = videos.filter(v => !data.videoAssignments[v.id]);
-    } else {
-      filtered = videos.filter(v => data.videoAssignments[v.id] === categoryId);
-    }
+    // Filter by category based on folder structure
+    const filtered = videos.filter(v => getCategoryFromPath(v.path, v.mediaRoot) === categoryId);
 
-    // Sort by modified date
-    filtered.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    // Group videos by subfolder within the category folder
+    const fsFolders = {};
+    const rootVideos = [];
 
-    res.json(filtered);
+    filtered.forEach(video => {
+      const relativePath = path.relative(video.mediaRoot, video.path);
+      const parts = relativePath.split(path.sep);
+
+      // parts[0] = category folder (e.g., "home-videos")
+      // parts[1] = project/show folder (e.g., "jarren-titans")
+      // parts[2+] = deeper folders or the file
+
+      if (parts.length <= 2) {
+        // Video is directly in the category folder (no subfolder)
+        rootVideos.push(video);
+      } else {
+        // Video is in a subfolder - get the immediate subfolder name
+        const folderName = parts[1];
+        const folderPath = path.join(video.mediaRoot, parts[0], folderName);
+        const folderId = Buffer.from(folderPath).toString('base64url');
+
+        if (!fsFolders[folderId]) {
+          fsFolders[folderId] = {
+            id: folderId,
+            name: folderName,
+            path: folderPath,
+            type: 'filesystem',
+            videos: []
+          };
+        }
+        fsFolders[folderId].videos.push(video);
+      }
+    });
+
+    // Sort root videos by modified date
+    rootVideos.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+    // Convert folders object to array and add video counts
+    const folderList = Object.values(fsFolders).map(folder => ({
+      id: folder.id,
+      name: folder.name,
+      path: folder.path,
+      type: 'filesystem',
+      videoCount: folder.videos.length
+    })).sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      folders: folderList,
+      videos: rootVideos
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -256,6 +485,179 @@ router.get('/:id/category', (req, res) => {
   }
 });
 
+// ============ FILESYSTEM FOLDERS ============
+
+// Get videos from a filesystem folder
+router.get('/fs-folder/:folderId', async (req, res) => {
+  try {
+    const folderPath = Buffer.from(req.params.folderId, 'base64url').toString('utf8');
+
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+
+    // Scan the folder for videos
+    const videos = await scanDirectory(folderPath, 'video');
+
+    // Sort by name (natural sort for numbers)
+    videos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    res.json({
+      folderId: req.params.folderId,
+      folderName: path.basename(folderPath),
+      videos
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ MANUAL FOLDERS ============
+
+// Get all folders (optionally filtered by category)
+router.get('/folders', (req, res) => {
+  try {
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+    let folders = data.folders || [];
+
+    // Filter by category if specified
+    if (req.query.categoryId) {
+      folders = folders.filter(f => f.categoryId === req.query.categoryId);
+    }
+
+    res.json(folders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new folder
+router.post('/folders', (req, res) => {
+  try {
+    const { name, categoryId } = req.body;
+
+    if (!name || !categoryId) {
+      return res.status(400).json({ error: 'Name and categoryId are required' });
+    }
+
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+    if (!data.folders) data.folders = [];
+    if (!data.folderAssignments) data.folderAssignments = {};
+
+    const folder = {
+      id: crypto.randomBytes(8).toString('hex'),
+      name,
+      categoryId,
+      createdAt: new Date().toISOString()
+    };
+
+    data.folders.push(folder);
+    writeJsonFile(getCategoriesPath(), data);
+
+    res.json(folder);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update folder (rename)
+router.put('/folders/:folderId', (req, res) => {
+  try {
+    const { name } = req.body;
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+
+    const folder = (data.folders || []).find(f => f.id === req.params.folderId);
+    if (!folder) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+
+    folder.name = name;
+    writeJsonFile(getCategoriesPath(), data);
+
+    res.json(folder);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete folder
+router.delete('/folders/:folderId', (req, res) => {
+  try {
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+
+    // Remove folder
+    data.folders = (data.folders || []).filter(f => f.id !== req.params.folderId);
+
+    // Remove video assignments to this folder
+    if (data.folderAssignments) {
+      Object.keys(data.folderAssignments).forEach(videoId => {
+        if (data.folderAssignments[videoId] === req.params.folderId) {
+          delete data.folderAssignments[videoId];
+        }
+      });
+    }
+
+    writeJsonFile(getCategoriesPath(), data);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get videos in a folder
+router.get('/folders/:folderId/videos', async (req, res) => {
+  try {
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+
+    // Get all videos
+    const videos = [];
+    for (const dir of req.config.media.videos) {
+      const resolved = path.resolve(__dirname, '../..', dir);
+      if (fs.existsSync(resolved)) {
+        const files = await scanDirectory(resolved, 'video');
+        videos.push(...files);
+      }
+    }
+
+    // Filter to folder
+    const folderAssignments = data.folderAssignments || {};
+    const filtered = videos.filter(v => folderAssignments[v.id] === req.params.folderId);
+
+    // Sort by modified date
+    filtered.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+    res.json(filtered);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Set video's folder
+router.put('/:id/folder', (req, res) => {
+  try {
+    const { folderId } = req.body;
+    const data = readJsonFile(getCategoriesPath(), defaultCategories);
+    if (!data.folderAssignments) data.folderAssignments = {};
+
+    if (folderId === null) {
+      delete data.folderAssignments[req.params.id];
+    } else {
+      data.folderAssignments[req.params.id] = folderId;
+
+      // Also set the category to match the folder's category
+      const folder = (data.folders || []).find(f => f.id === folderId);
+      if (folder) {
+        data.videoAssignments[req.params.id] = folder.categoryId;
+      }
+    }
+
+    writeJsonFile(getCategoriesPath(), data);
+    res.json({ success: true, folderId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ VIDEOS ============
 
 // Get all videos
@@ -365,14 +767,43 @@ router.get('/:id/stream', (req, res) => {
   }
 });
 
-// Get video thumbnail (placeholder - returns a default image or generates one)
+// Get video thumbnail
 router.get('/:id/thumb', async (req, res) => {
+  const placeholderPath = path.resolve(__dirname, '../../public/assets/icons/video-placeholder.svg');
+
   try {
-    // For now, return a placeholder
-    // In production, you'd use ffmpeg to generate thumbnails
-    res.redirect('/assets/icons/video-placeholder.svg');
+    const filePath = Buffer.from(req.params.id, 'base64url').toString('utf8');
+
+    if (!fs.existsSync(filePath)) {
+      return res.sendFile(placeholderPath);
+    }
+
+    // Check if thumbnail already exists
+    const thumbDir = getThumbsDir();
+    const thumbPath = path.join(thumbDir, `${req.params.id}.jpg`);
+
+    if (fs.existsSync(thumbPath)) {
+      return res.sendFile(thumbPath);
+    }
+
+    // Generate thumbnail with ffmpeg if available
+    if (ffmpegAvailable) {
+      try {
+        await runThumbJob(filePath, thumbPath);
+
+        if (fs.existsSync(thumbPath)) {
+          return res.sendFile(thumbPath);
+        }
+      } catch (ffmpegError) {
+        console.error('FFmpeg thumbnail generation failed:', ffmpegError.message);
+      }
+    }
+
+    // Fallback to placeholder
+    res.sendFile(placeholderPath);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Thumbnail error:', error.message);
+    res.sendFile(placeholderPath);
   }
 });
 

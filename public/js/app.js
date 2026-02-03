@@ -16,12 +16,17 @@ class App {
 
     // Load saved theme color
     this.loadThemeColor();
+
   }
 
   async loadThemeColor() {
     try {
       const settings = await API.settings.get();
-      if (settings.theme?.accentColor) {
+      if (settings.theme?.preset && App.THEME_PRESETS[settings.theme.preset]) {
+        this.applyPresetTheme(settings.theme.preset);
+      } else if (settings.theme?.accentColor) {
+        this.currentThemePreset = null;
+        this.clearPresetMultiColor();
         this.applyThemeColor(settings.theme.accentColor);
       }
     } catch (error) {
@@ -58,6 +63,10 @@ class App {
     root.style.setProperty('--carmine-glow', hexColor);
     root.style.setProperty('--carmine-muted', toHex(Math.floor(r * 0.2), Math.floor(g * 0.2), Math.floor(b * 0.2)));
 
+    // Compute contrast color for text on accent-colored backgrounds
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    root.style.setProperty('--text-on-accent', luminance > 0.5 ? '#000000' : '#ffffff');
+
     // Update text colors
     root.style.setProperty('--text-primary', hexColor);
     root.style.setProperty('--text-secondary', toHex(darkR, darkG, darkB));
@@ -91,6 +100,72 @@ class App {
     root.style.setProperty('--bg-panel', `rgb(${Math.floor(r * 0.01)}, ${Math.floor(g * 0.01)}, ${Math.floor(b * 0.01)})`);
   }
 
+  // Preset theme definitions
+  static THEME_PRESETS = {
+    usa: {
+      label: 'USA',
+      emoji: '\u{1F1FA}\u{1F1F8}',
+      primary: '#E8283B',
+      secondary: '#4A55A2',
+      accent: '#FFFFFF'
+    },
+    christmas: {
+      label: 'Christmas',
+      emoji: '\u{1F384}',
+      primary: '#c41e3a',
+      secondary: '#2d5a27',
+      accent: '#ffd700'
+    },
+    rgb: {
+      label: 'RGB',
+      emoji: '\u{1F308}',
+      primary: '#ff0000',
+      secondary: '#00ff00',
+      accent: '#0000ff'
+    }
+  };
+
+  applyPresetTheme(presetName) {
+    const preset = App.THEME_PRESETS[presetName];
+    if (!preset) {
+      this.currentThemePreset = null;
+      return;
+    }
+    this.currentThemePreset = presetName;
+    // Use secondary as base UI color so the preset doesn't feel mono-color
+    this.applyThemeColor(preset.secondary);
+
+    const root = document.documentElement;
+    root.style.setProperty('--carmine-secondary', preset.secondary);
+    root.style.setProperty('--carmine-accent', preset.accent);
+
+    // Set the 3 preset cycling colors + their rgba border/glow variants
+    const colors = [preset.primary, preset.secondary, preset.accent];
+    colors.forEach((hex, i) => {
+      const idx = i + 1;
+      root.style.setProperty(`--preset-${idx}`, hex);
+      const pr = parseInt(hex.slice(1, 3), 16);
+      const pg = parseInt(hex.slice(3, 5), 16);
+      const pb = parseInt(hex.slice(5, 7), 16);
+      root.style.setProperty(`--preset-${idx}-border`, `rgba(${pr},${pg},${pb},0.3)`);
+      root.style.setProperty(`--preset-${idx}-glow`, `rgba(${pr},${pg},${pb},0.4)`);
+      root.style.setProperty(`--preset-${idx}-muted`, `rgba(${pr},${pg},${pb},0.15)`);
+    });
+
+    document.body.classList.add('preset-active');
+  }
+
+  clearPresetMultiColor() {
+    document.body.classList.remove('preset-active');
+    const root = document.documentElement;
+    for (let i = 1; i <= 3; i++) {
+      root.style.removeProperty(`--preset-${i}`);
+      root.style.removeProperty(`--preset-${i}-border`);
+      root.style.removeProperty(`--preset-${i}-glow`);
+      root.style.removeProperty(`--preset-${i}-muted`);
+    }
+  }
+
   // Cleanup method to clear intervals and event listeners when navigating away
   cleanup() {
     if (this.vizUpdateInterval) {
@@ -104,6 +179,10 @@ class App {
     if (this.musicKeyHandler) {
       document.removeEventListener('keydown', this.musicKeyHandler);
       this.musicKeyHandler = null;
+    }
+    if (this.thumbObserver) {
+      this.thumbObserver.disconnect();
+      this.thumbObserver = null;
     }
     // Exit cinema mode when leaving videos page
     this.exitCinemaMode();
@@ -571,72 +650,111 @@ class App {
   }
 
   // ===== VIDEOS =====
-  async renderVideos() {
+  async renderVideos(browsePath = '') {
     this.cleanup();
     const content = document.getElementById('page-content');
 
     // Enter cinema mode - hide music player
     this.enterCinemaMode();
 
-    try {
-      const [categories, allVideos] = await Promise.all([
-        API.videos.getCategories(),
-        API.videos.getAll()
-      ]);
+    // Store current browse path
+    this.currentBrowsePath = browsePath;
 
-      // Store all videos for search
-      this.allVideos = allVideos;
+    try {
+      const browseData = await API.videos.browse(browsePath);
+
+      // Load all videos for search only once (lazy)
+      if (!this.allVideos) {
+        API.videos.getAll().then(allVideos => {
+          this.allVideos = allVideos;
+        });
+      }
+
+      const { breadcrumb, folders, videos } = browseData;
+
+      const breadcrumbHtml = breadcrumb.map((crumb, i) => {
+        const isLast = i === breadcrumb.length - 1;
+        if (isLast) {
+          return `<span class="breadcrumb-current">${crumb.name}</span>`;
+        }
+        return `<a class="breadcrumb-link" data-path="${crumb.path}">${crumb.name}</a>
+                <span class="breadcrumb-sep">&gt;</span>`;
+      }).join(' ');
+
+      const hasContent = folders.length > 0 || videos.length > 0;
 
       content.innerHTML = `
         <div class="cinema-page">
           <div class="cinema-header">
-            <h1 class="cinema-title">Videos</h1>
-            <div class="cinema-search">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.35-4.35"/>
-              </svg>
-              <input type="text" id="video-search" placeholder="Search...">
+            <div class="cinema-header-top">
+              <div class="cinema-breadcrumb" id="video-breadcrumb">
+                ${breadcrumbHtml}
+              </div>
+              <div class="cinema-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input type="text" id="video-search" placeholder="Search...">
+              </div>
             </div>
           </div>
 
           <div class="cinema-content" id="cinema-content">
-            ${allVideos.length === 0 ? `
+            ${!hasContent ? `
               <div class="empty-state cinema-empty">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
                   <polygon points="10 8 16 12 10 16 10 8"/>
                 </svg>
-                <h3>No Videos Yet</h3>
-                <p>Add video files to your media folders or upload some to get started.</p>
-                <a href="#/upload" class="btn btn-primary">Upload Videos</a>
+                <h3>Empty Folder</h3>
+                <p>No videos or subfolders here.</p>
+                ${browsePath ? '' : '<a href="#/upload" class="btn btn-primary">Upload Videos</a>'}
               </div>
             ` : `
-              ${categories.map(cat => `
-                <div class="cinema-row" data-category="${cat.id}">
-                  <div class="cinema-row-header">
-                    <h2 class="cinema-row-title">
-                      ${this.getCategoryIcon(cat.icon)}
-                      ${cat.name}
-                    </h2>
-                    <span class="cinema-row-count">${cat.count} ${cat.count === 1 ? 'video' : 'videos'}</span>
-                  </div>
-                  <div class="cinema-row-content" id="row-${cat.id}">
-                    <div class="cinema-scroll">
-                      <!-- Videos loaded dynamically -->
-                    </div>
-                  </div>
-                </div>
-              `).join('')}
+              <div class="cinema-grid">
+                ${folders.map(folder => this.renderBrowseFolderCard(folder)).join('')}
+                ${videos.map(video => this.renderCinemaCard(video)).join('')}
+              </div>
             `}
           </div>
         </div>
       `;
 
-      // Load videos for each category
-      for (const cat of categories) {
-        await this.loadCategoryVideos(cat.id);
-      }
+      // Breadcrumb click handlers
+      document.querySelectorAll('#video-breadcrumb .breadcrumb-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.renderVideos(link.dataset.path);
+        });
+      });
+
+      // Folder click handlers
+      document.querySelectorAll('.cinema-card.browse-folder-card').forEach(card => {
+        card.addEventListener('click', () => {
+          this.renderVideos(card.dataset.folderPath);
+        });
+      });
+
+      // Video click handlers
+      document.querySelectorAll('.cinema-card:not(.browse-folder-card)').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.cinema-card-menu')) return;
+          const videoId = card.dataset.id;
+          const video = videos.find(v => v.id === videoId);
+          if (video) {
+            this.playVideoImmersive(video);
+          }
+        });
+
+        const menuBtn = card.querySelector('.cinema-card-menu');
+        if (menuBtn) {
+          menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showVideoContextMenu(card.dataset.id, card.dataset.name, e);
+          });
+        }
+      });
 
       // Search functionality
       const searchInput = document.getElementById('video-search');
@@ -645,6 +763,9 @@ class App {
           this.filterVideos(e.target.value);
         });
       }
+
+      // Lazy-load video thumbnails
+      this.initVideoThumbObserver();
 
     } catch (error) {
       console.error('Failed to load videos:', error);
@@ -668,110 +789,10 @@ class App {
     }
   }
 
-  getCategoryIcon(icon) {
-    const icons = {
-      film: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-        <line x1="7" y1="2" x2="7" y2="22"/>
-        <line x1="17" y1="2" x2="17" y2="22"/>
-        <line x1="2" y1="12" x2="22" y2="12"/>
-        <line x1="2" y1="7" x2="7" y2="7"/>
-        <line x1="2" y1="17" x2="7" y2="17"/>
-        <line x1="17" y1="7" x2="22" y2="7"/>
-        <line x1="17" y1="17" x2="22" y2="17"/>
-      </svg>`,
-      tv: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
-        <polyline points="17 2 12 7 7 2"/>
-      </svg>`,
-      video: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <polygon points="23 7 16 12 23 17 23 7"/>
-        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-      </svg>`,
-      folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-      </svg>`
-    };
-    return icons[icon] || icons.folder;
-  }
-
-  async loadCategoryVideos(categoryId) {
-    try {
-      const container = document.querySelector(`#row-${categoryId} .cinema-scroll`);
-      if (!container) return;
-
-      // Handle TV Shows differently - show as folders
-      if (categoryId === 'tvshows') {
-        const shows = await API.videos.getTVShows();
-
-        if (shows.length === 0) {
-          container.innerHTML = `
-            <div class="cinema-empty-row">
-              <p>No TV shows in this category</p>
-            </div>
-          `;
-          return;
-        }
-
-        container.innerHTML = shows.map(show => this.renderTVShowCard(show)).join('');
-
-        // Add click handlers for TV show cards
-        container.querySelectorAll('.cinema-card.tv-show-card').forEach(card => {
-          card.addEventListener('click', (e) => {
-            if (e.target.closest('.cinema-card-menu')) return;
-            const showId = card.dataset.showId;
-            const showName = card.dataset.showName;
-            this.openTVShow(showId, showName);
-          });
-        });
-
-        return;
-      }
-
-      // Regular video category
-      const videos = await API.videos.getByCategory(categoryId);
-
-      if (videos.length === 0) {
-        container.innerHTML = `
-          <div class="cinema-empty-row">
-            <p>No videos in this category</p>
-          </div>
-        `;
-        return;
-      }
-
-      container.innerHTML = videos.map(video => this.renderCinemaCard(video, categoryId)).join('');
-
-      // Add click handlers
-      container.querySelectorAll('.cinema-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-          if (e.target.closest('.cinema-card-menu')) return;
-
-          const videoId = card.dataset.id;
-          const video = videos.find(v => v.id === videoId);
-          if (video) {
-            this.playVideoImmersive(video);
-          }
-        });
-
-        // Context menu for category change
-        const menuBtn = card.querySelector('.cinema-card-menu');
-        if (menuBtn) {
-          menuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.showVideoContextMenu(card.dataset.id, card.dataset.name, e);
-          });
-        }
-      });
-    } catch (error) {
-      console.error(`Failed to load category ${categoryId}:`, error);
-    }
-  }
-
-  renderTVShowCard(show) {
+  renderBrowseFolderCard(folder) {
     return `
-      <div class="cinema-card tv-show-card" data-show-id="${show.id}" data-show-name="${show.name}">
-        <div class="cinema-card-poster tv-show-poster">
+      <div class="cinema-card browse-folder-card" data-folder-path="${folder.path}">
+        <div class="cinema-card-poster folder-poster">
           <div class="cinema-card-overlay">
             <div class="cinema-card-play">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -779,165 +800,35 @@ class App {
               </svg>
             </div>
           </div>
-          <div class="cinema-card-icon tv-show-icon">
+          <div class="cinema-card-icon folder-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
-              <polyline points="17 2 12 7 7 2"/>
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
-          <div class="tv-show-episode-count">${show.episodeCount} ${show.episodeCount === 1 ? 'Episode' : 'Episodes'}</div>
+          <div class="folder-video-count">${folder.itemCount} ${folder.itemCount === 1 ? 'item' : 'items'}</div>
         </div>
         <div class="cinema-card-info">
-          <div class="cinema-card-title">${show.name}</div>
-          <div class="cinema-card-meta">TV Show</div>
+          <div class="cinema-card-title">${folder.name}</div>
+          <div class="cinema-card-meta">Folder</div>
         </div>
       </div>
     `;
   }
 
-  async openTVShow(showId, showName) {
-    const content = document.getElementById('cinema-content');
-    if (!content) return;
-
-    try {
-      const result = await API.videos.getTVShowEpisodes(showId);
-
-      // Store for back navigation
-      this.currentTVShowId = showId;
-      this.currentTVShowName = showName;
-
-      // Hide category rows and show episode view
-      document.querySelectorAll('.cinema-row').forEach(row => {
-        row.style.display = 'none';
-      });
-
-      // Remove any existing episode view
-      const existingView = content.querySelector('.tv-show-view');
-      if (existingView) existingView.remove();
-
-      // Create episode view
-      const episodeView = document.createElement('div');
-      episodeView.className = 'tv-show-view';
-      episodeView.innerHTML = `
-        <div class="tv-show-header">
-          <button class="tv-show-back" id="tv-show-back">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 18 9 12 15 6"/>
-            </svg>
-            Back to Videos
-          </button>
-          <div class="tv-show-info">
-            <h1 class="tv-show-title">${showName}</h1>
-            <p class="tv-show-meta">${result.episodes.length} ${result.episodes.length === 1 ? 'Episode' : 'Episodes'}</p>
-          </div>
-        </div>
-        <div class="tv-show-episodes">
-          ${result.episodes.map(ep => this.renderEpisodeCard(ep)).join('')}
-        </div>
-      `;
-
-      content.prepend(episodeView);
-
-      // Back button handler
-      document.getElementById('tv-show-back')?.addEventListener('click', () => {
-        this.closeTVShow();
-      });
-
-      // Episode click handlers
-      episodeView.querySelectorAll('.episode-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-          if (e.target.closest('.cinema-card-menu')) return;
-          const videoId = card.dataset.id;
-          const episode = result.episodes.find(ep => ep.id === videoId);
-          if (episode) {
-            this.playVideoImmersive(episode);
-          }
-        });
-
-        // Context menu for episode
-        const menuBtn = card.querySelector('.cinema-card-menu');
-        if (menuBtn) {
-          menuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.showVideoContextMenu(card.dataset.id, card.dataset.name, e);
-          });
-        }
-      });
-
-    } catch (error) {
-      console.error('Failed to load TV show episodes:', error);
-    }
-  }
-
-  renderEpisodeCard(episode) {
-    const title = episode.name.replace(/\.[^/.]+$/, '').replace(/[._-]/g, ' ');
-
-    return `
-      <div class="episode-card cinema-card" data-id="${episode.id}" data-name="${episode.name}">
-        <div class="episode-number">E${episode.episodeNumber}</div>
-        <div class="cinema-card-poster">
-          <div class="cinema-card-overlay">
-            <div class="cinema-card-play">
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3"/>
-              </svg>
-            </div>
-          </div>
-          <div class="cinema-card-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <rect x="2" y="2" width="20" height="20" rx="2"/>
-              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
-            </svg>
-          </div>
-        </div>
-        <div class="cinema-card-info">
-          <div class="cinema-card-title">${title}</div>
-          <div class="cinema-card-meta">${this.formatFileSize(episode.size)}</div>
-        </div>
-        <button class="cinema-card-menu" title="Options">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="5" r="2"/>
-            <circle cx="12" cy="12" r="2"/>
-            <circle cx="12" cy="19" r="2"/>
-          </svg>
-        </button>
-      </div>
-    `;
-  }
-
-  closeTVShow() {
-    // Remove episode view
-    const episodeView = document.querySelector('.tv-show-view');
-    if (episodeView) episodeView.remove();
-
-    // Show category rows again
-    document.querySelectorAll('.cinema-row').forEach(row => {
-      row.style.display = '';
-    });
-
-    this.currentTVShowId = null;
-    this.currentTVShowName = null;
-  }
-
-  renderCinemaCard(video, categoryId) {
-    // Extract title from filename (remove extension)
+  renderCinemaCard(video) {
     const title = video.name.replace(/\.[^/.]+$/, '').replace(/[._-]/g, ' ');
+    const streamUrl = API.videos.getStreamUrl(video.id);
 
     return `
-      <div class="cinema-card" data-id="${video.id}" data-name="${video.name}" data-category="${categoryId}">
+      <div class="cinema-card" data-id="${video.id}" data-name="${video.name}">
         <div class="cinema-card-poster">
+          <video class="cinema-card-thumb" data-src="${streamUrl}#t=2" preload="none" muted playsinline></video>
           <div class="cinema-card-overlay">
             <div class="cinema-card-play">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <polygon points="5 3 19 12 5 21 5 3"/>
               </svg>
             </div>
-          </div>
-          <div class="cinema-card-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <rect x="2" y="2" width="20" height="20" rx="2"/>
-              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
-            </svg>
           </div>
         </div>
         <div class="cinema-card-info">
@@ -955,24 +846,58 @@ class App {
     `;
   }
 
-  showVideoContextMenu(videoId, videoName, event) {
-    // Remove any existing menu
+  initVideoThumbObserver() {
+    if (this.thumbObserver) {
+      this.thumbObserver.disconnect();
+    }
+
+    let loadingCount = 0;
+    const MAX_CONCURRENT = 4;
+    const pending = [];
+
+    const loadThumb = (video) => {
+      if (loadingCount >= MAX_CONCURRENT) {
+        pending.push(video);
+        return;
+      }
+      loadingCount++;
+      video.src = video.dataset.src;
+      video.preload = 'metadata';
+      const onReady = () => {
+        loadingCount--;
+        video.removeEventListener('loadeddata', onReady);
+        video.removeEventListener('error', onReady);
+        if (pending.length > 0) {
+          loadThumb(pending.shift());
+        }
+      };
+      video.addEventListener('loadeddata', onReady);
+      video.addEventListener('error', onReady);
+    };
+
+    this.thumbObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const video = entry.target;
+          this.thumbObserver.unobserve(video);
+          loadThumb(video);
+        }
+      });
+    }, { rootMargin: '200px' });
+
+    document.querySelectorAll('.cinema-card-thumb[data-src]').forEach(video => {
+      this.thumbObserver.observe(video);
+    });
+  }
+
+  async showVideoContextMenu(videoId, videoName, event) {
     document.querySelectorAll('.context-menu').forEach(m => m.remove());
 
     const menu = document.createElement('div');
     menu.className = 'context-menu';
+
     menu.innerHTML = `
       <div class="context-menu-header">${videoName}</div>
-      <div class="context-menu-divider"></div>
-      <button class="context-menu-item" data-action="category" data-category="movies">
-        ${this.getCategoryIcon('film')} Move to Movies
-      </button>
-      <button class="context-menu-item" data-action="category" data-category="tvshows">
-        ${this.getCategoryIcon('tv')} Move to TV Shows
-      </button>
-      <button class="context-menu-item" data-action="category" data-category="homevideos">
-        ${this.getCategoryIcon('video')} Move to Home Videos
-      </button>
       <div class="context-menu-divider"></div>
       <button class="context-menu-item danger" data-action="delete">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -983,31 +908,21 @@ class App {
       </button>
     `;
 
-    // Position menu
     menu.style.position = 'fixed';
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
 
     document.body.appendChild(menu);
 
-    // Handle clicks
     menu.querySelectorAll('.context-menu-item').forEach(item => {
       item.addEventListener('click', async () => {
         const action = item.dataset.action;
 
-        if (action === 'category') {
-          const category = item.dataset.category;
-          try {
-            await API.videos.setCategory(videoId, category);
-            this.renderVideos();
-          } catch (error) {
-            console.error('Failed to move video:', error);
-          }
-        } else if (action === 'delete') {
+        if (action === 'delete') {
           confirmModal.show(videoName, async () => {
             try {
               await API.videos.delete(videoId);
-              this.renderVideos();
+              this.renderVideos(this.currentBrowsePath || '');
             } catch (error) {
               console.error('Failed to delete video:', error);
             }
@@ -1018,7 +933,6 @@ class App {
       });
     });
 
-    // Close menu when clicking outside
     setTimeout(() => {
       document.addEventListener('click', function closeMenu(e) {
         if (!menu.contains(e.target)) {
@@ -1034,53 +948,44 @@ class App {
     const content = document.getElementById('cinema-content');
 
     if (!query) {
-      // Show all rows
-      document.querySelectorAll('.cinema-row').forEach(row => {
-        row.style.display = '';
-      });
-      document.querySelectorAll('.cinema-card').forEach(card => {
-        card.style.display = '';
-      });
-      // Remove search results if present
-      const searchResults = content.querySelector('.search-results');
-      if (searchResults) searchResults.remove();
+      // Re-render current browse view
+      this.renderVideos(this.currentBrowsePath || '');
       return;
     }
 
-    // Hide category rows
-    document.querySelectorAll('.cinema-row').forEach(row => {
-      row.style.display = 'none';
-    });
+    // Show search results from all videos
+    if (!this.allVideos) {
+      content.innerHTML = `<div class="cinema-empty-row"><p>Loading videos...</p></div>`;
+      API.videos.getAll().then(allVideos => {
+        this.allVideos = allVideos;
+        this.filterVideos(query);
+      });
+      return;
+    }
 
-    // Show search results
     const filtered = this.allVideos.filter(v =>
       v.name.toLowerCase().includes(query)
     );
 
-    let searchResults = content.querySelector('.search-results');
-    if (!searchResults) {
-      searchResults = document.createElement('div');
-      searchResults.className = 'search-results';
-      content.prepend(searchResults);
-    }
+    content.innerHTML = '';
 
     if (filtered.length === 0) {
-      searchResults.innerHTML = `
+      content.innerHTML = `
         <div class="cinema-empty-row">
           <p>No videos found for "${query}"</p>
         </div>
       `;
     } else {
-      searchResults.innerHTML = `
+      content.innerHTML = `
         <h2 class="cinema-row-title">Search Results</h2>
         <div class="cinema-grid">
-          ${filtered.map(video => this.renderCinemaCard(video, 'search')).join('')}
+          ${filtered.map(video => this.renderCinemaCard(video)).join('')}
         </div>
       `;
 
-      // Add click handlers
-      searchResults.querySelectorAll('.cinema-card').forEach(card => {
-        card.addEventListener('click', () => {
+      content.querySelectorAll('.cinema-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.cinema-card-menu')) return;
           const videoId = card.dataset.id;
           const video = filtered.find(v => v.id === videoId);
           if (video) {
@@ -1088,6 +993,8 @@ class App {
           }
         });
       });
+
+      this.initVideoThumbObserver();
     }
   }
 
@@ -1316,6 +1223,19 @@ class App {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
+  // Parse the current --carmine CSS variable into RGB components for the canvas visualizer
+  getThemeRGB() {
+    const hex = getComputedStyle(document.documentElement).getPropertyValue('--carmine').trim();
+    if (hex && hex.startsWith('#') && hex.length >= 7) {
+      return {
+        r: parseInt(hex.slice(1, 3), 16),
+        g: parseInt(hex.slice(3, 5), 16),
+        b: parseInt(hex.slice(5, 7), 16)
+      };
+    }
+    return { r: 245, g: 236, b: 0 }; // fallback
+  }
+
   initMusicVisualizer() {
     const canvas = document.getElementById('viz-canvas');
     if (!canvas) return;
@@ -1339,6 +1259,11 @@ class App {
       const width = canvas.width;
       const height = canvas.height;
 
+      // Read theme color each frame so it stays in sync with user changes
+      const { r, g, b } = this.getThemeRGB();
+      const darkR = Math.max(0, r - 50), darkG = Math.max(0, g - 50), darkB = Math.max(0, b - 50);
+      const lightR = Math.min(255, r + 40), lightG = Math.min(255, g + 40), lightB = Math.min(255, b + 40);
+
       // Clear canvas
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, width, height);
@@ -1350,6 +1275,18 @@ class App {
         dataArray = musicPlayer.dataArray;
 
         // Update freq status
+        const freqStatus = document.getElementById('viz-freq-status');
+        if (freqStatus) freqStatus.textContent = 'ACTIVE';
+      } else if (musicPlayer.isPlaying) {
+        // Playing but no analyser (iOS) — simulate movement from audio time
+        const t = musicPlayer.audio.currentTime || Date.now() / 1000;
+        dataArray = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          dataArray[i] = 80 + Math.sin(t * 3.5 + i * 0.7) * 60
+                            + Math.sin(t * 5.2 + i * 1.3) * 30
+                            + Math.sin(t * 1.8 + i * 0.4) * 25;
+        }
+
         const freqStatus = document.getElementById('viz-freq-status');
         if (freqStatus) freqStatus.textContent = 'ACTIVE';
       } else {
@@ -1367,6 +1304,60 @@ class App {
       const barWidth = (width / barCount) - 2;
       const maxBarHeight = height * 0.45;
 
+      // Get bar color based on preset
+      const getBarColor = (i, barCount) => {
+        const preset = this.currentThemePreset;
+
+        if (preset === 'usa') {
+          const cantonWidth = Math.floor(barCount * 0.4);
+          if (i < cantonWidth) {
+            // Blue canton
+            return { r: 74, g: 85, b: 162 }; // #4A55A2
+          }
+          // Red and white stripes
+          const stripeIndex = i % 6;
+          if (stripeIndex < 3) {
+            return { r: 232, g: 40, b: 59 }; // #E8283B
+          }
+          return { r: 255, g: 255, b: 255 };
+        }
+
+        if (preset === 'christmas') {
+          if (i % 8 === 0) {
+            return { r: 255, g: 215, b: 0 }; // Gold
+          }
+          if (i % 2 === 0) {
+            return { r: 196, g: 30, b: 58 }; // Red
+          }
+          return { r: 45, g: 90, b: 39 }; // Green
+        }
+
+        if (preset === 'rgb') {
+          const hueOffset = (Date.now() / 20) % 360;
+          const hue = (hueOffset + (i / barCount) * 360) % 360;
+          // HSL to RGB conversion
+          const s = 1, l = 0.5;
+          const c = (1 - Math.abs(2 * l - 1)) * s;
+          const x2 = c * (1 - Math.abs((hue / 60) % 2 - 1));
+          const m = l - c / 2;
+          let rr, gg, bb;
+          if (hue < 60) { rr = c; gg = x2; bb = 0; }
+          else if (hue < 120) { rr = x2; gg = c; bb = 0; }
+          else if (hue < 180) { rr = 0; gg = c; bb = x2; }
+          else if (hue < 240) { rr = 0; gg = x2; bb = c; }
+          else if (hue < 300) { rr = x2; gg = 0; bb = c; }
+          else { rr = c; gg = 0; bb = x2; }
+          return {
+            r: Math.round((rr + m) * 255),
+            g: Math.round((gg + m) * 255),
+            b: Math.round((bb + m) * 255)
+          };
+        }
+
+        // Default: use theme color
+        return { r, g, b };
+      };
+
       // Draw bars
       for (let i = 0; i < barCount; i++) {
         const dataIndex = Math.floor((i / barCount) * dataArray.length);
@@ -1376,11 +1367,19 @@ class App {
         const x = i * (barWidth + 2);
         const y = height / 2 - barHeight;
 
+        const col = getBarColor(i, barCount);
+        const colLightR = Math.min(255, col.r + 40);
+        const colLightG = Math.min(255, col.g + 40);
+        const colLightB = Math.min(255, col.b + 40);
+        const colDarkR = Math.max(0, col.r - 50);
+        const colDarkG = Math.max(0, col.g - 50);
+        const colDarkB = Math.max(0, col.b - 50);
+
         // Main bar with gradient
         const gradient = ctx.createLinearGradient(x, y, x, y + barHeight);
-        gradient.addColorStop(0, '#ff3333');
-        gradient.addColorStop(0.5, '#ff0a0a');
-        gradient.addColorStop(1, '#cc0000');
+        gradient.addColorStop(0, `rgb(${colLightR}, ${colLightG}, ${colLightB})`);
+        gradient.addColorStop(0.5, `rgb(${col.r}, ${col.g}, ${col.b})`);
+        gradient.addColorStop(1, `rgb(${colDarkR}, ${colDarkG}, ${colDarkB})`);
 
         ctx.fillStyle = gradient;
         ctx.fillRect(x, y, barWidth, barHeight);
@@ -1391,10 +1390,19 @@ class App {
           ctx.fillRect(x, y + j, barWidth, 1);
         }
 
+        // USA preset: draw star dots in the canton area
+        if (this.currentThemePreset === 'usa' && i < Math.floor(barCount * 0.4) && i % 3 === 0) {
+          const starY = y + barHeight * 0.3;
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          ctx.beginPath();
+          ctx.arc(x + barWidth / 2, starY, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
         // Reflection (mirrored, faded)
         const reflectionGradient = ctx.createLinearGradient(x, height / 2, x, height / 2 + barHeight * 0.6);
-        reflectionGradient.addColorStop(0, 'rgba(255, 10, 10, 0.4)');
-        reflectionGradient.addColorStop(1, 'rgba(255, 10, 10, 0)');
+        reflectionGradient.addColorStop(0, `rgba(${col.r}, ${col.g}, ${col.b}, 0.4)`);
+        reflectionGradient.addColorStop(1, `rgba(${col.r}, ${col.g}, ${col.b}, 0)`);
 
         ctx.fillStyle = reflectionGradient;
         ctx.fillRect(x, height / 2 + 5, barWidth, barHeight * 0.6);
@@ -1407,7 +1415,16 @@ class App {
       }
 
       // Draw center line
-      ctx.fillStyle = 'rgba(255, 10, 10, 0.3)';
+      if (this.currentThemePreset === 'christmas') {
+        // Red-green gradient center line
+        const lineGrad = ctx.createLinearGradient(0, 0, width, 0);
+        lineGrad.addColorStop(0, 'rgba(196, 30, 58, 0.5)');
+        lineGrad.addColorStop(0.5, 'rgba(255, 215, 0, 0.5)');
+        lineGrad.addColorStop(1, 'rgba(45, 90, 39, 0.5)');
+        ctx.fillStyle = lineGrad;
+      } else {
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.3)`;
+      }
       ctx.fillRect(0, height / 2 - 1, width, 2);
 
       requestAnimationFrame(draw);
@@ -2279,6 +2296,24 @@ class App {
           <h3 class="settings-section-title">Appearance</h3>
           <div class="settings-row">
             <div class="settings-label">
+              Theme Presets
+              <small>Quick theme presets with custom visualizer effects</small>
+            </div>
+            <div class="preset-selector">
+              ${Object.entries(App.THEME_PRESETS).map(([key, preset]) => `
+                <button class="preset-btn ${settings.theme?.preset === key ? 'active' : ''}" data-preset="${key}">
+                  <span class="preset-btn-emoji">${preset.emoji}</span>
+                  <span class="preset-btn-label">${preset.label}</span>
+                </button>
+              `).join('')}
+              <button class="preset-btn ${!settings.theme?.preset ? 'active' : ''}" data-preset="custom">
+                <span class="preset-btn-emoji">\u{1F3A8}</span>
+                <span class="preset-btn-label">Custom</span>
+              </button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">
               Accent Color
               <small>Main theme color for the interface</small>
             </div>
@@ -2415,19 +2450,63 @@ class App {
       const saveAndApplyColor = async (color) => {
         this.applyThemeColor(color);
         try {
-          await API.settings.update({ theme: { accentColor: color } });
+          await API.settings.update({ theme: { accentColor: color, preset: null } });
         } catch (error) {
           console.error('Failed to save color:', error);
         }
       };
 
+      // Preset button handlers
+      const updatePresetButtons = (activePreset) => {
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.preset === activePreset);
+        });
+      };
+
+      const deselectPreset = () => {
+        this.currentThemePreset = null;
+        this.clearPresetMultiColor();
+        updatePresetButtons('custom');
+      };
+
+      document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const preset = btn.dataset.preset;
+          if (preset === 'custom') {
+            this.currentThemePreset = null;
+            this.clearPresetMultiColor();
+            const color = colorPicker.value;
+            this.applyThemeColor(color);
+            updatePresetButtons('custom');
+            try {
+              await API.settings.update({ theme: { accentColor: color, preset: null } });
+            } catch (error) {
+              console.error('Failed to save preset:', error);
+            }
+          } else {
+            this.applyPresetTheme(preset);
+            const presetDef = App.THEME_PRESETS[preset];
+            colorPicker.value = presetDef.secondary;
+            colorHexInput.value = presetDef.secondary;
+            updatePresetButtons(preset);
+            try {
+              await API.settings.update({ theme: { accentColor: presetDef.secondary, preset: preset } });
+            } catch (error) {
+              console.error('Failed to save preset:', error);
+            }
+          }
+        });
+      });
+
       colorPicker.addEventListener('input', (e) => {
         const color = e.target.value;
         colorHexInput.value = color;
         this.applyThemeColor(color);
+        deselectPreset();
       });
 
       colorPicker.addEventListener('change', (e) => {
+        deselectPreset();
         saveAndApplyColor(e.target.value);
       });
 
@@ -2439,6 +2518,7 @@ class App {
         if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
           colorPicker.value = color;
           this.applyThemeColor(color);
+          deselectPreset();
         }
       });
 
@@ -2448,6 +2528,7 @@ class App {
           color = '#' + color;
         }
         if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+          deselectPreset();
           saveAndApplyColor(color);
         } else {
           colorHexInput.value = colorPicker.value;
@@ -2457,6 +2538,7 @@ class App {
       resetColorBtn.addEventListener('click', () => {
         colorPicker.value = defaultColor;
         colorHexInput.value = defaultColor;
+        deselectPreset();
         saveAndApplyColor(defaultColor);
       });
 

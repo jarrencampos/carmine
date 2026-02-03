@@ -30,6 +30,11 @@ const API = {
       return API.fetch('/videos');
     },
 
+    async browse(relativePath = '') {
+      const params = relativePath ? `?path=${encodeURIComponent(relativePath)}` : '';
+      return API.fetch(`/videos/browse${params}`);
+    },
+
     async get(id) {
       return API.fetch(`/videos/${id}`);
     },
@@ -55,6 +60,10 @@ const API = {
       return API.fetch(`/videos/categories/${categoryId}`);
     },
 
+    async getFsFolder(folderId) {
+      return API.fetch(`/videos/fs-folder/${folderId}`);
+    },
+
     async setCategory(videoId, categoryId) {
       return API.fetch(`/videos/${videoId}/category`, {
         method: 'PUT',
@@ -73,6 +82,41 @@ const API = {
 
     async getTVShowEpisodes(showId) {
       return API.fetch(`/videos/tvshows/${showId}/episodes`);
+    },
+
+    // Folders
+    async getFolders(categoryId = null) {
+      const url = categoryId ? `/videos/folders?categoryId=${categoryId}` : '/videos/folders';
+      return API.fetch(url);
+    },
+
+    async createFolder(name, categoryId) {
+      return API.fetch('/videos/folders', {
+        method: 'POST',
+        body: JSON.stringify({ name, categoryId })
+      });
+    },
+
+    async updateFolder(folderId, name) {
+      return API.fetch(`/videos/folders/${folderId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name })
+      });
+    },
+
+    async deleteFolder(folderId) {
+      return API.fetch(`/videos/folders/${folderId}`, { method: 'DELETE' });
+    },
+
+    async getFolderVideos(folderId) {
+      return API.fetch(`/videos/folders/${folderId}/videos`);
+    },
+
+    async setVideoFolder(videoId, folderId) {
+      return API.fetch(`/videos/${videoId}/folder`, {
+        method: 'PUT',
+        body: JSON.stringify({ folderId })
+      });
     }
   },
 

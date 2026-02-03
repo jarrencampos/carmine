@@ -698,3 +698,37 @@ body {
     max-width: 100%;
   }
 }
+
+/* ===== PRESET SIDEBAR OVERRIDE ===== */
+body.preset-active .sidebar {
+  background: var(--preset-2-muted);
+  border-right-color: var(--preset-2-border);
+}
+
+body.preset-active .sidebar-header {
+  border-bottom-color: var(--preset-2-border);
+}
+
+body.preset-active .sidebar-footer {
+  border-top-color: var(--preset-2-border);
+}
+
+body.preset-active .logo-icon {
+  border-color: var(--preset-2);
+  color: var(--preset-2);
+  box-shadow: 0 0 10px var(--preset-2-glow);
+}
+
+body.preset-active .nav-item.active {
+  color: var(--preset-2);
+  border-color: var(--preset-2-border);
+}
+
+body.preset-active .nav-item.active::before {
+  background: var(--preset-2);
+  box-shadow: 0 0 10px var(--preset-2);
+}
+
+body.preset-active .nav-divider {
+  background: var(--preset-2-border);
+}

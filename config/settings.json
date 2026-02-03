@@ -27,6 +27,7 @@
     ]
   },
   "theme": {
-    "accentColor": "#ff2600"
+    "accentColor": "#00ff00",
+    "preset": "rgb"
   }
 }

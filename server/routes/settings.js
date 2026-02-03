@@ -21,8 +21,8 @@ router.put('/', (req, res) => {
     // Write to file
     fs.writeFileSync(req.configPath, JSON.stringify(newConfig, null, 2));
 
-    // Update in-memory config
-    req.config = newConfig;
+    // Update in-memory config for subsequent requests
+    req.updateConfig(newConfig);
 
     res.json(newConfig);
   } catch (error) {
