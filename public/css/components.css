@@ -3006,6 +3006,75 @@ body.preset-active .server-title {
   color: var(--preset-1);
 }
 
+/* Music visualizer page multi-color overrides */
+body.preset-active .music-visualizer-page {
+  color: var(--preset-1);
+}
+
+body.preset-active .viz-header-left {
+  color: var(--preset-3);
+}
+
+body.preset-active .viz-status-dot {
+  background: var(--preset-1);
+  box-shadow: 0 0 8px var(--preset-1);
+}
+
+body.preset-active .viz-track-title {
+  color: var(--preset-3);
+}
+
+body.preset-active .viz-track-artist {
+  color: var(--preset-2);
+}
+
+body.preset-active .viz-progress-fill {
+  background: var(--preset-1);
+  box-shadow: 0 0 10px var(--preset-1);
+}
+
+body.preset-active .viz-control-btn {
+  color: var(--preset-3);
+}
+
+body.preset-active .viz-control-btn:hover {
+  text-shadow: 0 0 10px var(--preset-3);
+}
+
+body.preset-active .viz-control-btn.active {
+  color: var(--preset-1);
+  text-shadow: 0 0 15px var(--preset-1);
+}
+
+body.preset-active .viz-toggle-list {
+  color: var(--preset-2);
+}
+
+body.preset-active .viz-footer {
+  border-top-color: var(--preset-1-border);
+}
+
+body.preset-active .viz-play-icon {
+  background: var(--preset-1);
+  box-shadow: 0 0 8px var(--preset-1);
+}
+
+body.preset-active .viz-artist-name {
+  color: var(--preset-1);
+}
+
+body.preset-active .viz-track-item.active {
+  border-color: var(--preset-3-border);
+}
+
+body.preset-active .viz-track-item.active .viz-track-item-title {
+  color: var(--preset-3);
+}
+
+body.preset-active .viz-canvas-container::before {
+  border-color: var(--preset-1-border);
+}
+
 .path-list {
   margin-top: var(--space-md);
 }

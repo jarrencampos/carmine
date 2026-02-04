@@ -114,6 +114,16 @@ body {
   box-shadow: 0 0 10px var(--carmine);
 }
 
+.nav-sub-item {
+  padding-left: calc(var(--space-lg) + 20px + var(--space-md));
+  font-size: 0.85em;
+}
+
+.nav-sub-item .nav-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .nav-icon {
   width: 20px;
   height: 20px;
@@ -611,6 +621,10 @@ body {
 
   .sidebar .nav-item span,
   .sidebar .storage-text {
+    display: none;
+  }
+
+  .sidebar .nav-sub-item {
     display: none;
   }
 

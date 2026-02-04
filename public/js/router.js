@@ -27,10 +27,18 @@ class Router {
     const routePath = '/' + (path || '');
 
     // Update active nav item
+    const currentRoute = path || 'home';
     document.querySelectorAll('.nav-item').forEach(item => {
       const route = item.dataset.route;
-      item.classList.toggle('active', route === (path || 'home'));
+      const isActive = route === currentRoute;
+      item.classList.toggle('active', isActive);
     });
+    // Also highlight parent nav item for sub-items
+    const activeItem = document.querySelector(`.nav-item[data-route="${currentRoute}"]`);
+    if (activeItem && activeItem.dataset.parent) {
+      const parent = document.querySelector(`.nav-item[data-route="${activeItem.dataset.parent}"]`);
+      if (parent) parent.classList.add('active');
+    }
 
     // Find and execute route handler
     const handler = this.routes[routePath] || this.routes['/'];

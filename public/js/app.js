@@ -116,6 +116,27 @@ class App {
       secondary: '#2d5a27',
       accent: '#ffd700'
     },
+    halloween: {
+      label: 'Halloween',
+      emoji: '\u{1F383}',
+      primary: '#FF6600',
+      secondary: '#8B00CC',
+      accent: '#39FF14'
+    },
+    barbie: {
+      label: 'Barbie',
+      emoji: '\u{1F451}',
+      primary: '#FF69B4',
+      secondary: '#FF1493',
+      accent: '#FFB6C1'
+    },
+    synthwave: {
+      label: 'Synthwave',
+      emoji: '\u{1F305}',
+      primary: '#FF2975',
+      secondary: '#7B2FBE',
+      accent: '#00F0FF'
+    },
     rgb: {
       label: 'RGB',
       emoji: '\u{1F308}',
@@ -1322,6 +1343,70 @@ class App {
           return { r: 255, g: 255, b: 255 };
         }
 
+        if (preset === 'barbie') {
+          // Hot pink, soft pink, white shimmer
+          const shimmer = Math.sin(Date.now() / 600 + i * 0.8) * 0.5 + 0.5;
+          if (i % 7 === 0) {
+            // White sparkle bars
+            const v = Math.round(200 + shimmer * 55);
+            return { r: v, g: v, b: v };
+          }
+          if (i % 2 === 0) {
+            // Hot pink
+            return { r: 255, g: 20, b: 147 };   // #FF1493
+          }
+          // Soft pink with shimmer
+          return {
+            r: 255,
+            g: Math.round(105 + shimmer * 77),
+            b: Math.round(180 + shimmer * 25)
+          };
+        }
+
+        if (preset === 'synthwave') {
+          // Hot pink → purple → cyan gradient that drifts slowly
+          const shift = (Date.now() / 4000) % 1;
+          const t = ((i / barCount) + shift) % 1;
+          if (t < 0.4) {
+            // Hot pink to purple
+            const p = t / 0.4;
+            return {
+              r: Math.round(255 - (255 - 123) * p),
+              g: Math.round(41 - (41 - 47) * p),
+              b: Math.round(117 + (190 - 117) * p)
+            };
+          }
+          if (t < 0.7) {
+            // Purple to cyan
+            const p = (t - 0.4) / 0.3;
+            return {
+              r: Math.round(123 - 123 * p),
+              g: Math.round(47 + (240 - 47) * p),
+              b: Math.round(190 + (255 - 190) * p)
+            };
+          }
+          // Cyan back to hot pink
+          const p = (t - 0.7) / 0.3;
+          return {
+            r: Math.round(0 + 255 * p),
+            g: Math.round(240 - (240 - 41) * p),
+            b: Math.round(255 - (255 - 117) * p)
+          };
+        }
+
+        if (preset === 'halloween') {
+          // Flickering between orange, purple, and eerie green
+          const flicker = Math.sin(Date.now() / 300 + i * 0.5);
+          if (i % 5 === 0) {
+            // Eerie green accent bars
+            return { r: 57, g: 255, b: 20 };  // #39FF14
+          }
+          if (flicker > 0.3) {
+            return { r: 255, g: 102, b: 0 };   // Orange #FF6600
+          }
+          return { r: 139, g: 0, b: 204 };     // Purple #8B00CC
+        }
+
         if (preset === 'christmas') {
           if (i % 8 === 0) {
             return { r: 255, g: 215, b: 0 }; // Gold
@@ -1415,7 +1500,27 @@ class App {
       }
 
       // Draw center line
-      if (this.currentThemePreset === 'christmas') {
+      if (this.currentThemePreset === 'barbie') {
+        const lineGrad = ctx.createLinearGradient(0, 0, width, 0);
+        lineGrad.addColorStop(0, 'rgba(255, 20, 147, 0.5)');
+        lineGrad.addColorStop(0.5, 'rgba(255, 182, 193, 0.5)');
+        lineGrad.addColorStop(1, 'rgba(255, 105, 180, 0.5)');
+        ctx.fillStyle = lineGrad;
+      } else if (this.currentThemePreset === 'synthwave') {
+        // Neon pink-purple-cyan center line
+        const lineGrad = ctx.createLinearGradient(0, 0, width, 0);
+        lineGrad.addColorStop(0, 'rgba(255, 41, 117, 0.6)');
+        lineGrad.addColorStop(0.5, 'rgba(123, 47, 190, 0.6)');
+        lineGrad.addColorStop(1, 'rgba(0, 240, 255, 0.6)');
+        ctx.fillStyle = lineGrad;
+      } else if (this.currentThemePreset === 'halloween') {
+        // Orange-purple gradient center line
+        const lineGrad = ctx.createLinearGradient(0, 0, width, 0);
+        lineGrad.addColorStop(0, 'rgba(255, 102, 0, 0.5)');
+        lineGrad.addColorStop(0.5, 'rgba(57, 255, 20, 0.4)');
+        lineGrad.addColorStop(1, 'rgba(139, 0, 204, 0.5)');
+        ctx.fillStyle = lineGrad;
+      } else if (this.currentThemePreset === 'christmas') {
         // Red-green gradient center line
         const lineGrad = ctx.createLinearGradient(0, 0, width, 0);
         lineGrad.addColorStop(0, 'rgba(196, 30, 58, 0.5)');

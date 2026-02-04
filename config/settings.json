@@ -27,7 +27,7 @@
     ]
   },
   "theme": {
-    "accentColor": "#00ff00",
-    "preset": "rgb"
+    "accentColor": "#4A55A2",
+    "preset": "usa"
   }
 }
